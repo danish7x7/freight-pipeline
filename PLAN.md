@@ -30,15 +30,19 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
       ✅ verified 2026-06-10: services healthy, `/health`→200, `uv run pytest` 10 passed.
 
 ## Phase 1 — Data layer
-- [ ] Supabase schema migration: `users`, `carriers`, `deals`, `email_messages`,
+- [x] Supabase schema migration: `users`, `carriers`, `deals`, `email_messages`,
       `attachments`, `rates`, `quotes`, `audit_log` with enums and FKs.
-- [ ] Unique constraints: `carriers.mc_number`, `email_messages.gmail_message_id`.
-- [ ] `rates` as append-only, effective-dated (`effective_from`/`effective_to`).
-- [ ] RLS policies: reviewer-owns-deal reads; admin-all; carriers/rates read-all
-      write-admin; `audit_log` insert-only, admin-read.
-- [ ] Seed script + **synthetic email generator** with labeled ground truth
-      (normal, malformed, and adversarial/injection emails).
+- [x] Unique constraints: `carriers.mc_number`, `email_messages.gmail_message_id`.
+- [x] `rates` as append-only, effective-dated. (Model A: `effective_from` only —
+      `effective_to` dropped; validity from next version. See DECISIONS 2026-06-10.)
+- [x] RLS policies: reviewer-owns-deal reads; admin-all; carriers/rates read-all
+      write-admin; `audit_log` insert-only, admin-read. (Invariant-bearing tables
+      server-side-write-only — see DECISIONS 2026-06-10. Deny-side proven.)
+- [x] Seed script + **synthetic email generator** with labeled ground truth
+      (normal, malformed, and adversarial/injection emails). (12 samples, 4/4/4.)
 - **Done when:** RLS denies a cross-reviewer query in a test; seed data loads.
+      ✅ verified 2026-06-10: `tests/test_rls.py` (hermetic, cross-reviewer + 4 deny
+      assertions) passes against the local stack; `supabase db reset` loads seed clean.
 
 ## Phase 2 — Ingestion + queue
 - [ ] Gmail OAuth (least-privilege: readonly + send), token stored encrypted.
