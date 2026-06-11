@@ -11,12 +11,18 @@ the model proposes, a person disposes.
 
 ## Quickstart (local)
 
-Requires [`uv`](https://docs.astral.sh/uv/) and Docker.
+Requires [`uv`](https://docs.astral.sh/uv/), Docker, and the
+[Supabase CLI](https://supabase.com/docs/guides/cli). Supabase Postgres (local stack on
+`:54322`) is the database of record; Docker Compose supplies only Redis; the API runs via
+`uv run`.
 
 ```bash
 uv sync                       # create the env from pyproject/uv.lock
 cp .env.example .env          # then fill in real values (never commit .env)
-docker compose up -d          # postgres, redis, api, worker
+supabase start                # Postgres + Auth + RLS + Storage (DB of record, :54322)
+supabase db reset             # apply migrations + seed
+docker compose up -d          # Redis (Supabase has none)
+uv run uvicorn freight.api.main:app --reload   # API: /health, /ingest, /poll
 uv run pytest                 # run the test suite
 uv run ruff check . && uv run mypy .
 ```

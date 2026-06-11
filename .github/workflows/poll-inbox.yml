@@ -1,0 +1,35 @@
+name: poll-inbox
+
+# Best-effort scheduled poll of the inbox.
+#
+# CADENCE IS APPROXIMATE. GitHub enforces a 5-minute MINIMUM on scheduled workflows,
+# and even */5 is best-effort (10-30 min delays under load, runs may be skipped).
+# PLAN's "~2 min" is aspirational on this platform. Use workflow_dispatch for precise
+# or manual triggering.
+#
+# CORRECTNESS IS INDEPENDENT OF CADENCE. Idempotent claims (Redis SET NX + DB unique)
+# plus the DB reconciliation sweep mean a delayed or dropped poll only adds latency,
+# never loss or double-process. The cron is a convenience trigger, not a correctness
+# dependency, so no external scheduler is warranted.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger a poll cycle
+        env:
+          POLL_ENDPOINT: ${{ secrets.POLL_ENDPOINT }}
+          POLL_TOKEN: ${{ secrets.POLL_TOKEN }}
+        run: |
+          # Inert until the Phase 8 deploy provides POLL_ENDPOINT. No live target yet,
+          # so this skips cleanly rather than failing the workflow.
+          if [ -z "$POLL_ENDPOINT" ]; then
+            echo "POLL_ENDPOINT not set — inert until Phase 8 deploy. Skipping."
+            exit 0
+          fi
+          curl -fsS -X POST "$POLL_ENDPOINT" \
+            -H "Authorization: Bearer $POLL_TOKEN"

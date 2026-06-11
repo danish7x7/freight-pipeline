@@ -6,10 +6,12 @@ implementation, change config (or extend the match here), never the call sites.
 """
 
 from freight.config import Settings, get_settings
+from freight.gmail import GmailApiClient
 from freight.interfaces import GmailClient, LLMClient, Queue
 from freight.mocks.gmail import MockGmailClient
 from freight.mocks.llm import MockLLMClient
 from freight.mocks.queue import InMemoryQueue
+from freight.queue import QStashQueue
 
 
 def build_gmail_client(settings: Settings | None = None) -> GmailClient:
@@ -18,7 +20,7 @@ def build_gmail_client(settings: Settings | None = None) -> GmailClient:
         case "mock":
             return MockGmailClient()
         case "gmail":
-            raise NotImplementedError("real GmailClient lands in Phase 2")
+            return GmailApiClient.from_settings(settings)
 
 
 def build_llm_client(settings: Settings | None = None) -> LLMClient:
@@ -36,4 +38,8 @@ def build_queue(settings: Settings | None = None) -> Queue:
         case "memory":
             return InMemoryQueue()
         case "qstash":
-            raise NotImplementedError("QStash queue lands in Phase 2")
+            return QStashQueue(
+                token=settings.qstash_token,
+                qstash_url=settings.qstash_url,
+                destination_url=settings.qstash_destination_url,
+            )

@@ -1,21 +1,11 @@
-# Local dev mirror of the cloud topology: postgres, redis, api, worker.
+# Local dev: Redis only.
+#
+# The DATABASE of record is the Supabase Postgres (local stack on :54322), which also
+# provides Auth + RLS + Storage. Supabase has no Redis, so compose supplies it. The api
+# and worker run via `uv run` in dev (matching how the tests and the poller already run)
+# — no cross-stack container networking. The Dockerfile is retained for the Phase 8
+# cloud deploy of the backend. See DECISIONS 2026-06-11.
 services:
-  postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: freight
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d freight"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   redis:
     image: redis:7
     ports:
@@ -25,49 +15,3 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  api:
-    build: .
-    command: uvicorn freight.api.main:app --host 0.0.0.0 --port 8000
-    # .env is optional locally; service-to-service URLs are set explicitly below.
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/freight
-      REDIS_URL: redis://redis:6379/0
-    ports:
-      - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status == 200 else 1)
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  worker:
-    build: .
-    command: python -m freight.worker.main
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/freight
-      REDIS_URL: redis://redis:6379/0
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-volumes:
-  pgdata:

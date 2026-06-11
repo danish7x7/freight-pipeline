@@ -1,21 +1,18 @@
-"""In-memory ``Queue`` mock.
+"""In-memory ``Queue`` mock — publish-only, matching the push-based Protocol.
 
-Mirrors the push model: published messages are recorded, and an optional ``Handler``
-is invoked per message to stand in for QStash's HTTP delivery.
+Records published messages. Delivery (retry + DLQ) is NOT this object's concern; that
+lives in ``LocalDispatcher`` (the separate consume-side abstraction), mirroring how
+QStash owns delivery server-side while ``Queue`` only publishes.
 """
 
-from freight.interfaces.queue import Handler
 from freight.interfaces.types import QueueMessage
 
 
 class InMemoryQueue:
-    """Records published messages; optionally dispatches them to a handler."""
+    """Records every published message."""
 
-    def __init__(self, handler: Handler | None = None) -> None:
-        self._handler = handler
+    def __init__(self) -> None:
         self.published: list[QueueMessage] = []
 
     async def publish(self, message: QueueMessage) -> None:
         self.published.append(message)
-        if self._handler is not None:
-            await self._handler(message)

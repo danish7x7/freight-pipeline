@@ -42,15 +42,10 @@ async def test_llm_complete_returns_result_and_records_prompt() -> None:
     assert client.prompts == ["classify this"]
 
 
-async def test_queue_publish_records_and_dispatches() -> None:
-    seen: list[QueueMessage] = []
-
-    async def handler(message: QueueMessage) -> None:
-        seen.append(message)
-
-    queue = InMemoryQueue(handler=handler)
+async def test_queue_publish_records() -> None:
+    queue = InMemoryQueue()
     message = QueueMessage(id="msg-0001", payload={"x": 1})
     await queue.publish(message)
 
+    # Publish-only: it records, delivery is LocalDispatcher's job.
     assert queue.published == [message]
-    assert seen == [message]

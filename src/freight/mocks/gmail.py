@@ -1,21 +1,12 @@
-"""In-memory ``GmailClient`` mock serving synthetic messages."""
-
-from datetime import UTC, datetime
+"""In-memory ``GmailClient`` mock serving the synthetic corpus."""
 
 from freight.interfaces.types import InboundMessage, OutboundMessage
+from freight.synthetic import generate_dataset
 
 
-def _sample_messages() -> list[InboundMessage]:
-    return [
-        InboundMessage(
-            gmail_message_id="msg-0001",
-            thread_id="thread-0001",
-            sender="broker@example.com",
-            subject="Rate request: Chicago, IL -> Dallas, TX",
-            body="Need a dry van rate for 42,000 lbs, pickup Monday.",
-            received_at=datetime(2026, 6, 10, 14, 30, tzinfo=UTC),
-        ),
-    ]
+def _default_inbox() -> list[InboundMessage]:
+    """The labeled synthetic corpus, as raw inbound messages."""
+    return [sample.message for sample in generate_dataset()]
 
 
 class MockGmailClient:
@@ -23,7 +14,7 @@ class MockGmailClient:
 
     def __init__(self, inbox: list[InboundMessage] | None = None) -> None:
         self._inbox: list[InboundMessage] = (
-            inbox if inbox is not None else _sample_messages()
+            inbox if inbox is not None else _default_inbox()
         )
         self.sent: list[OutboundMessage] = []
 

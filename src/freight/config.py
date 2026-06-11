@@ -51,14 +51,18 @@ class Settings(BaseSettings):
     # --- Upstash QStash ---
     qstash_token: str = ""
     qstash_url: str = "https://qstash.upstash.io"
+    # The consumer endpoint QStash pushes to (the deployed /ingest URL). Placeholder
+    # locally; real value wired at Phase 8.
+    qstash_destination_url: str = ""
 
     # --- Hugging Face serverless inference ---
     hf_token: str = ""
     hf_model: str = ""
 
-    # --- Gmail OAuth ---
+    # --- Gmail OAuth (single inbox; refresh token is the one runtime secret) ---
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
+    gmail_refresh_token: str = ""
     gmail_redirect_uri: str = Field(
         default="http://localhost:8000/auth/gmail/callback"
     )

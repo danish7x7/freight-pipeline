@@ -79,14 +79,16 @@ insert into public.deals
 -- ---------------------------------------------------------------------------
 -- Email linked to deal A
 -- ---------------------------------------------------------------------------
+-- ingest_status = 'processed': this demo email is already extracted (intent +
+-- confidence set), so it is coherent and the reconciliation sweep never touches it.
 insert into public.email_messages
     (id, gmail_message_id, thread_id, deal_id, sender, subject, body,
-     intent, confidence, received_at) values
+     intent, confidence, received_at, ingest_status) values
     ('f1111111-1111-1111-1111-111111111111', 'seed-msg-0001', 'seed-thread-0001',
      'd1111111-1111-1111-1111-111111111111', 'broker@example.com',
      'Rate request: Chicago, IL -> Dallas, TX',
      'Need a dry van rate for 42,000 lbs, pickup Monday.',
-     'rate_request', 0.92, now() - interval '2 days');
+     'rate_request', 0.92, now() - interval '2 days', 'processed');
 
 -- ---------------------------------------------------------------------------
 -- Quote on deal B, pinning the reefer contracted rate (amount copied from it)

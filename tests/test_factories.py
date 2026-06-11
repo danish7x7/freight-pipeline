@@ -15,10 +15,11 @@ def test_factories_build_mocks_by_default(settings: Settings) -> None:
     assert isinstance(build_queue(settings), InMemoryQueue)
 
 
-def test_real_gmail_backend_not_yet_implemented() -> None:
+def test_gmail_backend_constructs() -> None:
+    from freight.gmail import GmailApiClient
+
     settings = Settings(gmail_backend="gmail")
-    with pytest.raises(NotImplementedError):
-        build_gmail_client(settings)
+    assert isinstance(build_gmail_client(settings), GmailApiClient)
 
 
 def test_real_llm_backend_not_yet_implemented() -> None:
@@ -27,7 +28,8 @@ def test_real_llm_backend_not_yet_implemented() -> None:
         build_llm_client(settings)
 
 
-def test_real_queue_backend_not_yet_implemented() -> None:
+def test_qstash_backend_constructs() -> None:
     settings = Settings(queue_backend="qstash")
-    with pytest.raises(NotImplementedError):
-        build_queue(settings)
+    from freight.queue import QStashQueue
+
+    assert isinstance(build_queue(settings), QStashQueue)

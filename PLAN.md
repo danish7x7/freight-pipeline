@@ -45,12 +45,19 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
       assertions) passes against the local stack; `supabase db reset` loads seed clean.
 
 ## Phase 2 — Ingestion + queue
-- [ ] Gmail OAuth (least-privilege: readonly + send), token stored encrypted.
-- [ ] Poll loop behind `GmailClient`; mock implementation serves synthetic emails.
-- [ ] Publish each new message to the queue (Upstash QStash) with retries + DLQ.
-- [ ] Idempotency: claim by `gmail_message_id` (Redis SET NX + DB unique backstop).
-- [ ] GitHub Actions cron for the inbox poll (every ~2 min).
+- [x] Gmail OAuth (least-privilege: readonly + send). (Single-inbox refresh token =
+      one runtime secret, no token table. Scopes asserted least-privilege.)
+- [x] Poll loop behind `GmailClient`; mock implementation serves synthetic emails.
+      (Poller + DB reconciliation sweep; mock serves the 12-sample corpus.)
+- [x] Publish each new message to the queue (Upstash QStash) with retries + DLQ.
+      (QStashQueue slice; retry/DLQ via the separate LocalDispatcher; cloud DLQ @ Phase 8.)
+- [x] Idempotency: claim by `gmail_message_id` (Redis SET NX + DB unique backstop).
+      (DB unique authoritative; Redis fail-open pre-check; sweep recovers stuck rows.)
+- [x] GitHub Actions cron for the inbox poll. (`*/5` — GitHub's floor; curls `/poll`;
+      inert until Phase 8. Correctness independent of cadence. See DECISIONS.)
 - **Done when:** a synthetic email enqueues exactly once; a poisoned one hits the DLQ.
+      ✅ verified 2026-06-11 locally: `test_poller.py` (exactly-once + re-poll-zero +
+      sweep recovery), `test_consumer.py` (envelope-poison → DLQ). QStash-cloud half @ Phase 8.
 
 ## Phase 3 — Extraction
 - [ ] `LLMClient` against HF serverless inference; structured/JSON decoding.

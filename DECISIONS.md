@@ -1,6 +1,84 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-11 — Phase 2 close-out: local topology + ingestion summary
+**Local topology (choice a).** Supabase Postgres (local stack `:54322`) is the DATABASE
+of record — it also provides Auth + RLS + Storage. Docker Compose is reduced to
+**Redis only** (Supabase has no Redis). The api/worker run via `uv run` in dev — matching
+how the tests and the poller already run — so there is no cross-stack container
+networking to misconfigure. The Phase 0 compose `postgres` service (5432, schema-less)
+and `pgdata` volume are removed; the `api`/`worker` compose services are dropped too. The
+`Dockerfile` is retained for the Phase 8 cloud deploy of the backend. (Alternative b —
+keep api/worker in compose pointing at `host.docker.internal:54322` with
+`extra_hosts: host-gateway` — was rejected as needless networking at this volume.)
+
+**Ingestion model (the spine of Phase 2).**
+- **Idempotency:** the DB unique constraint on `email_messages.gmail_message_id` is
+  authoritative; Redis `SET NX` is a fail-open, evictable pre-check (an outage forces the
+  slow DB path, never loss). The poller's per-message order is: pre-check → committed
+  `claim_insert` (the claim) → publish id-only thin payload → set `queued`. A crash
+  between the committed claim and the publish leaves a `received` row that the **DB
+  reconciliation sweep** re-enqueues (bypassing `SET NX`, runs even if Gmail listing
+  fails). Sweep threshold (5 min) > worst-case poll runtime + cron interval.
+- **Publish-once vs process-once:** the poll enqueues each id once across runs, but QStash
+  is at-least-once and redelivers; the real guarantee is **process-once at the consume
+  boundary**, implemented in Phase 3 (carry-forward: conditional UPDATE on
+  `ingest_status`). Phase 2's consumer does no writes, so double delivery is harmless.
+- **DLQ scope:** envelope-poison → DLQ is proven locally on the mock (`LocalDispatcher`
+  retries N+1 then dead-letters; `/ingest` maps a raise → 5xx). Content-poison is deferred
+  to Phase 3; the QStash-cloud DLQ half is proven at Phase 8.
+- **Gmail:** single-inbox, refresh-token OAuth (one runtime secret, no token table),
+  scopes least-privilege (`gmail.readonly` + `gmail.send`).
+
+## 2026-06-11 — Phase 2.7: poll cron is best-effort; correctness independent of cadence
+The GitHub Actions cron (`poll-inbox.yml`) curls a deployed `POST /poll` on the always-on
+backend (poller lives in the backend; CI just pings). **Cadence is `*/5`, not `*/2`:**
+GitHub enforces a 5-minute MINIMUM on scheduled workflows and even that is best-effort
+(10-30 min delays, skipped runs under load) — PLAN's "~2 min" is aspirational here.
+`workflow_dispatch` is kept for precise/manual triggering. **Correctness is independent
+of cadence:** idempotent claims + the DB reconciliation sweep mean a delayed or dropped
+poll only adds latency, never loss or double-process — so no external scheduler is
+warranted. The cron job is guarded to skip cleanly when `POLL_ENDPOINT` is unset (inert
+until Phase 8).
+
+**Carry-forward — /poll auth (Phase 6 GATE).** Same class as `/ingest`: `/poll` triggers
+ingestion and is currently UNAUTHENTICATED. A shared-secret / OIDC check must land before
+the Phase 8 deploy.
+
+**Phase 8 operational carry-forwards (would silently break the live poll; NOT caught by
+"workflow validates"):**
+- **60-day auto-disable.** GitHub auto-disables scheduled workflows after 60 days of repo
+  inactivity. A quiet showcase repo stops polling silently (email notice only). Needs an
+  operational reminder / keepalive.
+- **Default-branch only.** Scheduled workflows trigger only from the DEFAULT branch — the
+  cron won't run from a feature branch. Relevant when wiring the live target at Phase 8.
+
+## 2026-06-11 — Phase 2.5: ingestion consumer + /ingest route; three carry-forwards
+The consumer (`IngestConsumer.handle`) does ONLY its Phase 2 job: re-fetch the committed
+row by id and validate the envelope (row exists + non-empty sender), else raise
+`IngestError`. Success is an ack stub marked "Phase 3: extraction extends here". It does
+NO writes in Phase 2, so a double delivery is observationally harmless. The `/ingest`
+route is a sync `def` (threadpool, shares the sync repo), runs the async `handle` via
+`asyncio.run`, and maps a raise → 5xx so QStash retries on status (same failure trigger
+as the local dispatcher's retry-on-exception); a poison message exhausts retries → DLQ.
+
+**Carry-forward 1 — process-once (Phase 3).** When extraction adds write-side work, the
+consumer enforces CLAUDE.md "never process twice" with a compare-and-set:
+`UPDATE email_messages SET ingest_status='processed' WHERE gmail_message_id=:id AND
+ingest_status='queued' RETURNING ...`. The delivery that flips the row wins and does the
+work; 0 rows flipped → ack and skip. The `processed`/`failed` enum states stay reserved
+until then. (Use this conditional-UPDATE approach; don't re-litigate.)
+
+**Carry-forward 2 — /ingest signature verification (Phase 6 GATE).** The route is
+UNAUTHENTICATED. Upstash-Signature verification is owned by PLAN Phase 6 and MUST land
+before the Phase 8 deploy — an unauthenticated public ingest endpoint must not reach
+production. Phase 8 cannot precede this.
+
+**Carry-forward 3 — permanent-vs-transient error routing (Phase 3).** Once
+content-validation failures exist, permanent "will-never-succeed" failures can
+fast-fail/non-retry instead of burning N+1 attempts. Not needed while everything maps to
+5xx.
+
 ## 2026-06-10 — Phase 1 close-out: RLS test is an opt-in integration test
 The RLS regression guard (`tests/test_rls.py`) connects to the local supabase DB
 (`psycopg`, DSN env-overridable via `RLS_TEST_DSN`) and **skips** when the stack isn't

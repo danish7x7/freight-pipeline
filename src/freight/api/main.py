@@ -5,6 +5,8 @@ from typing import Literal
 from fastapi import FastAPI
 
 from freight import __version__
+from freight.api.routes.ingest import router as ingest_router
+from freight.api.routes.poll import router as poll_router
 
 
 def create_app() -> FastAPI:
@@ -15,6 +17,8 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, Literal["ok"]]:
         return {"status": "ok"}
 
+    app.include_router(ingest_router)
+    app.include_router(poll_router)
     return app
 
 
