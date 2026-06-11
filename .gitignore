@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs / uv
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment / secrets (NEVER commit real values)
+.env
+.env.*
+!.env.example
+
+# Node / Next.js (web/)
+web/node_modules/
+web/.next/
+web/out/
+web/.vercel/
+
+# Supabase local artifacts
+supabase/.branches/
+supabase/.temp/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

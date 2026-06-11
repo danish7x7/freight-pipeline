@@ -1,0 +1,70 @@
+"""Application settings, loaded from the environment (see .env.example).
+
+Settings are the single source of runtime configuration. Interface implementations
+are selected by the ``*_backend`` fields and built in ``factories.py`` — never by
+rewriting call sites.
+"""
+
+from enum import StrEnum
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class AppEnv(StrEnum):
+    local = "local"
+    staging = "staging"
+    production = "production"
+
+
+class Settings(BaseSettings):
+    """Typed view of the process environment."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # --- App ---
+    app_env: AppEnv = AppEnv.local
+    log_level: str = "INFO"
+    app_secret: str = "dev-only-insecure-secret"
+
+    # --- Interface selection (swap impls by config, not by code) ---
+    llm_backend: Literal["mock", "hf"] = "mock"
+    gmail_backend: Literal["mock", "gmail"] = "mock"
+    queue_backend: Literal["memory", "qstash"] = "memory"
+
+    # --- Supabase ---
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_role_key: str = ""
+    database_url: str = "postgresql://postgres:postgres@localhost:5432/freight"
+
+    # --- Redis (Upstash) ---
+    redis_url: str = "redis://localhost:6379/0"
+
+    # --- Upstash QStash ---
+    qstash_token: str = ""
+    qstash_url: str = "https://qstash.upstash.io"
+
+    # --- Hugging Face serverless inference ---
+    hf_token: str = ""
+    hf_model: str = ""
+
+    # --- Gmail OAuth ---
+    gmail_client_id: str = ""
+    gmail_client_secret: str = ""
+    gmail_redirect_uri: str = Field(
+        default="http://localhost:8000/auth/gmail/callback"
+    )
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return the process-wide settings singleton."""
+    return Settings()
