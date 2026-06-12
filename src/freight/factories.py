@@ -8,6 +8,7 @@ implementation, change config (or extend the match here), never the call sites.
 from freight.config import Settings, get_settings
 from freight.gmail import GmailApiClient
 from freight.interfaces import GmailClient, LLMClient, Queue
+from freight.llm import HFLLMClient
 from freight.mocks.gmail import MockGmailClient
 from freight.mocks.llm import MockLLMClient
 from freight.mocks.queue import InMemoryQueue
@@ -29,7 +30,7 @@ def build_llm_client(settings: Settings | None = None) -> LLMClient:
         case "mock":
             return MockLLMClient()
         case "hf":
-            raise NotImplementedError("HF LLMClient lands in Phase 3")
+            return HFLLMClient.from_settings(settings)
 
 
 def build_queue(settings: Settings | None = None) -> Queue:

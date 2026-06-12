@@ -8,12 +8,23 @@ from freight.synthetic import SyntheticEmail, generate_dataset
 
 def test_dataset_shape_and_category_split() -> None:
     data = generate_dataset()
-    assert len(data) == 12
+    assert len(data) == 14
     assert dict(Counter(s.category for s in data)) == {
         "normal": 4,
         "malformed": 4,
-        "adversarial": 4,
+        "adversarial": 6,
     }
+
+
+def test_corpus_covers_attachment_borne_injection() -> None:
+    # The PDF vector must be represented so the Phase 9 eval proves containment on it.
+    pdf_injection = [
+        s
+        for s in generate_dataset()
+        if s.injection_technique == "pdf_embedded_injection"
+    ]
+    assert pdf_injection
+    assert all(s.message.attachment_refs for s in pdf_injection)
 
 
 def test_ids_unique_and_messages_are_boundary_type() -> None:

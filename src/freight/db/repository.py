@@ -9,12 +9,13 @@ reconciliation sweep (``list_stuck_received``) re-enqueues.
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from sqlalchemy import (
     Column,
     DateTime,
+    Float,
     MetaData,
     String,
     Table,
@@ -28,14 +29,28 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SAEnum,
 )
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from freight.interfaces.types import InboundMessage
 
-IngestStatus = Literal["received", "queued", "processed", "failed"]
+IngestStatus = Literal["received", "queued", "processed", "failed", "needs_review"]
+Intent = Literal["rate_request", "negotiation", "rc", "contract", "other"]
+# Terminal extraction outcomes the consumer writes (both return 2xx — see DECISIONS).
+ExtractionStatus = Literal["processed", "needs_review"]
+AttachmentFileType = Literal["pdf", "image", "other"]
 
 _metadata = MetaData()
+
+_EMAIL_INTENT = SAEnum(
+    "rate_request", "negotiation", "rc", "contract", "other",
+    name="email_intent", create_type=False,
+)
+_INGEST_STATUS = SAEnum(
+    "received", "queued", "processed", "failed", "needs_review",
+    name="email_ingest_status", create_type=False,
+)
 
 # Core mapping of the columns this repository touches. NOT a migration — the schema is
 # owned by supabase/migrations. Columns the repo doesn't use are intentionally omitted.
@@ -43,7 +58,10 @@ email_messages = Table(
     "email_messages",
     _metadata,
     Column(
-        "id", String, primary_key=True, server_default=text("gen_random_uuid()")
+        "id",
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
     ),
     Column("gmail_message_id", String, nullable=False, unique=True),
     Column("thread_id", String),
@@ -51,26 +69,34 @@ email_messages = Table(
     Column("subject", Text),
     Column("body", Text),
     Column("received_at", DateTime(timezone=True), nullable=False),
-    # Bound to the existing Postgres enum (owned by the migration, not created here).
-    Column(
-        "ingest_status",
-        SAEnum(
-            "received",
-            "queued",
-            "processed",
-            "failed",
-            name="email_ingest_status",
-            create_type=False,
-        ),
-        nullable=False,
-    ),
+    # Enums are bound to the existing Postgres types (owned by migrations, not created).
+    Column("ingest_status", _INGEST_STATUS, nullable=False),
+    Column("intent", _EMAIL_INTENT),
+    Column("confidence", Float),
+    Column("extracted", JSONB),
+    Column("review_reason", Text),
     Column("created_at", DateTime(timezone=True)),
+)
+
+_ATTACHMENT_FILE_TYPE = SAEnum(
+    "pdf", "image", "other", name="attachment_file_type", create_type=False,
+)
+
+attachments = Table(
+    "attachments",
+    _metadata,
+    Column("id", UUID(as_uuid=False), primary_key=True),
+    Column("email_message_id", UUID(as_uuid=False), nullable=False),
+    Column("storage_path", String, nullable=False),
+    Column("file_type", _ATTACHMENT_FILE_TYPE, nullable=False),
+    Column("mime_type", String),
 )
 
 
 class EmailRecord(BaseModel):
     """A persisted email envelope as the ingestion path sees it."""
 
+    id: str
     gmail_message_id: str
     thread_id: str | None
     sender: str
@@ -78,6 +104,15 @@ class EmailRecord(BaseModel):
     body: str | None
     received_at: datetime
     ingest_status: IngestStatus
+
+
+class AttachmentRecord(BaseModel):
+    """A persisted attachment row (for PDF intake)."""
+
+    id: str
+    storage_path: str
+    file_type: AttachmentFileType
+    mime_type: str | None
 
 
 def make_engine(database_url: str) -> Engine:
@@ -121,6 +156,7 @@ class IngestRepository:
     def get_by_gmail_id(self, gmail_message_id: str) -> EmailRecord | None:
         """Fetch an envelope by its idempotency key, or ``None`` if absent."""
         stmt = select(
+            email_messages.c.id,
             email_messages.c.gmail_message_id,
             email_messages.c.thread_id,
             email_messages.c.sender,
@@ -133,7 +169,9 @@ class IngestRepository:
             row = conn.execute(stmt).mappings().first()
         if row is None:
             return None
-        return EmailRecord.model_validate(dict(row))
+        data = dict(row)
+        data["id"] = str(data["id"])  # uuid -> str
+        return EmailRecord.model_validate(data)
 
     def set_ingest_status(self, gmail_message_id: str, status: IngestStatus) -> None:
         """Advance the ingest status (its own committed transaction)."""
@@ -160,3 +198,50 @@ class IngestRepository:
         )
         with self._engine.connect() as conn:
             return [r[0] for r in conn.execute(stmt)]
+
+    def process_once_extraction(
+        self,
+        gmail_message_id: str,
+        *,
+        intent: Intent | None,
+        confidence: float | None,
+        extracted: dict[str, Any] | None,
+        status: ExtractionStatus,
+        review_reason: str | None = None,
+    ) -> bool:
+        """Atomically write the extraction result iff the row is still 'queued'.
+
+        Returns True if THIS delivery won (1 row updated). 0 rows => another delivery
+        already processed it => the caller acks and skips. This conditional UPDATE is
+        the process-once guard (CLAUDE.md "never process twice").
+        """
+        stmt = (
+            update(email_messages)
+            .where(email_messages.c.gmail_message_id == gmail_message_id)
+            .where(email_messages.c.ingest_status == "queued")
+            .values(
+                intent=intent,
+                confidence=confidence,
+                extracted=extracted,
+                ingest_status=status,
+                review_reason=review_reason,
+            )
+        )
+        with self._engine.begin() as conn:
+            result = conn.execute(stmt)
+        return result.rowcount == 1
+
+    def get_attachments(self, email_message_id: str) -> list[AttachmentRecord]:
+        """Return attachment rows for an email (used by PDF intake)."""
+        stmt = select(
+            attachments.c.id,
+            attachments.c.storage_path,
+            attachments.c.file_type,
+            attachments.c.mime_type,
+        ).where(attachments.c.email_message_id == email_message_id)
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [
+            AttachmentRecord.model_validate({**dict(row), "id": str(row["id"])})
+            for row in rows
+        ]

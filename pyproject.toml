@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.28.1",
     "google-auth>=2.53.0",
     "google-api-python-client>=2.197.0",
+    "pypdf>=6.13.2",
 ]
 
 [dependency-groups]
@@ -23,6 +24,7 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
     "psycopg[binary]>=3.3.4",
+    "fpdf2>=2.8.7",
 ]
 
 [build-system]

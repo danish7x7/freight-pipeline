@@ -1,6 +1,60 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-11 — Phase 3 extraction: trust boundary, confidence, routing, PDF
+**Trust boundary (the injection defense).** Flow is `RawExtraction` (permissive,
+UNTRUSTED LLM output) → deterministic gate (`validation.validate`) → `ValidatedExtraction`
+(the only type the rate engine consumes). The LLM only emits structured data; it can
+never trigger an action. The gate is the defense, NOT the model's behavior — and it is
+**allowlist-REJECT, not sanitize**: states (USPS allowlist), equipment (format-gate then
+keyword-canonicalize; injection punctuation rejected *before* canon), weight (numeric
+format + range), cities (name format), and `intent` (5-value allowlist — intent is an
+allowlisted untrusted field). Anything off the allowlist/format/range → reject → review.
+We never strip injection out of a field and keep the remainder.
+
+**Confidence.** Composite is deterministic-led: `0.8 × completeness + 0.2 × model`, the
+model capped at weight 0.2 so a self-reported score can never cross the 0.7 threshold
+alone. **Any validation failure forces `needs_review` regardless of the model score** —
+an injected "confidence 1.0" cannot skip the gate.
+
+**Phase 3↔4 boundary.** Phase 3 stops at "validated record + intent + confidence written
+on the email row" (`extracted` jsonb, `intent`, `confidence`, `ingest_status`); deal
+creation/linking is Phase 4. Kept the boundary light so process-once is a single atomic
+write, not a multi-row idempotency problem.
+
+**Process-once.** A conditional UPDATE `WHERE ingest_status='queued'` — the delivery that
+flips the row wins and writes; 0 rows → already processed → ack and skip. **Accepted
+tradeoff:** extraction runs BEFORE the claiming UPDATE (no intermediate 'processing'
+state), so a rare concurrent redelivery can incur a duplicate LLM call. We accept the
+wasted call over the complexity of a processing-claim; correctness is unaffected (only
+one write lands, and the LLM has no side effects).
+
+**Status mapping (precise permanent-vs-transient form).** `processed` and `needs_review`
+both → the consumer returns 2xx (it SUCCEEDED at routing; QStash must not retry). Only
+TRANSIENT faults (`HFTransientError`: 503 cold-start / 429 / network; DB unreachable)
+raise → 5xx → QStash retries → DLQ on exhaustion. **Content failures (won't-parse /
+invalid / injection / no-text-layer) go to `needs_review` (the human sink), NOT the
+DLQ** — retrying them never helps. This refines Phase 2's loose "content-poison → DLQ".
+
+**One structured LLM call.** A single `complete` over the superset schema returns intent
++ all fields together (fewer HF calls → less cold-start/429 exposure, one transient
+failure point, one validation pass). HF slice (`HFLLMClient`) targets the
+OpenAI-compatible chat-completions surface; `HFTransientError` is the retry taxonomy;
+malformed model JSON → low-confidence `LLMResult` (no crash) → review.
+
+**PDF intake.** Text-layer only via `pypdf` (no OCR). Storage is an injectable
+`StorageReader` (fixture in tests; `UnconfiguredStorageReader` placeholder pre-Phase 8).
+A PDF attachment takes PRIORITY over the email body; no text layer → `needs_review`
+(`review_reason='no_text_layer'`), never a crash. PDF text runs the SAME extract +
+validation path, so containment holds on the attachment vector too.
+
+**Forward carry-forwards:**
+- **Phase 8:** verify the HF API shape against current HF docs and PIN `HF_MODEL` (the ⚠️
+  comments in `llm/hf.py`); wire Supabase Storage to replace `UnconfiguredStorageReader`
+  (and the QStash slice strings).
+- **Phase 9:** a pinned `HF_MODEL` is required for a reproducible extraction/eval run.
+- **Future:** scanned-PDF OCR — deferred; currently degrades cleanly to `needs_review`.
+
 ## 2026-06-11 — Phase 2 close-out: local topology + ingestion summary
 **Local topology (choice a).** Supabase Postgres (local stack `:54322`) is the DATABASE
 of record — it also provides Auth + RLS + Storage. Docker Compose is reduced to

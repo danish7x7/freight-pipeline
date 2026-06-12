@@ -55,9 +55,10 @@ class Settings(BaseSettings):
     # locally; real value wired at Phase 8.
     qstash_destination_url: str = ""
 
-    # --- Hugging Face serverless inference ---
+    # --- Hugging Face serverless inference (OpenAI-compatible chat-completions) ---
     hf_token: str = ""
     hf_model: str = ""
+    hf_base_url: str = "https://router.huggingface.co"
 
     # --- Gmail OAuth (single inbox; refresh token is the one runtime secret) ---
     gmail_client_id: str = ""

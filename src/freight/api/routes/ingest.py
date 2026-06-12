@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from freight.config import get_settings
 from freight.db.repository import IngestRepository, make_engine
+from freight.factories import build_llm_client
 from freight.ingestion.consumer import IngestConsumer, IngestError
 from freight.interfaces.types import QueueMessage
 
@@ -28,7 +29,9 @@ router = APIRouter()
 def get_consumer() -> IngestConsumer:
     """Build the consumer from config (overridden in tests)."""
     settings = get_settings()
-    return IngestConsumer(IngestRepository(make_engine(settings.database_url)))
+    repo = IngestRepository(make_engine(settings.database_url))
+    # Storage defaults to the Phase 8 placeholder (PDF byte reads land then).
+    return IngestConsumer(repo, build_llm_client(settings))
 
 
 ConsumerDep = Annotated[IngestConsumer, Depends(get_consumer)]

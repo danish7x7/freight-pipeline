@@ -1,6 +1,4 @@
-"""Factories return mock impls by default and refuse unbuilt backends."""
-
-import pytest
+"""Factories return mock impls by default and real impls when configured."""
 
 from freight.config import Settings
 from freight.factories import build_gmail_client, build_llm_client, build_queue
@@ -22,10 +20,11 @@ def test_gmail_backend_constructs() -> None:
     assert isinstance(build_gmail_client(settings), GmailApiClient)
 
 
-def test_real_llm_backend_not_yet_implemented() -> None:
+def test_llm_backend_constructs() -> None:
+    from freight.llm import HFLLMClient
+
     settings = Settings(llm_backend="hf")
-    with pytest.raises(NotImplementedError):
-        build_llm_client(settings)
+    assert isinstance(build_llm_client(settings), HFLLMClient)
 
 
 def test_qstash_backend_constructs() -> None:

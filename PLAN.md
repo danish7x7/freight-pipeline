@@ -60,13 +60,22 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
       sweep recovery), `test_consumer.py` (envelope-poison → DLQ). QStash-cloud half @ Phase 8.
 
 ## Phase 3 — Extraction
-- [ ] `LLMClient` against HF serverless inference; structured/JSON decoding.
-- [ ] Classify intent (rate_request / negotiation / rc / contract / other).
-- [ ] Extract fields under the Pydantic schema; score confidence.
-- [ ] Validate every field (route format, numeric ranges, allowlists) — untrusted in.
-- [ ] **PDF intake:** attachments → text/OCR → same extraction + validation path.
-- [ ] Low-confidence or invalid → flag for review / DLQ.
+- [x] `LLMClient` against HF serverless inference; structured/JSON decoding.
+      (HFLLMClient slice, chat-completions, HFTransientError taxonomy; ⚠️ verify @ Phase 8.)
+- [x] Classify intent (rate_request / negotiation / rc / contract / other).
+      (Intent is a field of the single structured extraction call.)
+- [x] Extract fields under the Pydantic schema; score confidence.
+      (RawExtraction→ValidatedExtraction; composite confidence, model capped.)
+- [x] Validate every field (route format, numeric ranges, allowlists) — untrusted in.
+      (Deterministic gate; allowlist-REJECT not sanitize — the injection defense.)
+- [x] **PDF intake:** attachments → text → same extraction + validation path.
+      (pypdf text-layer; injectable storage; no-text-layer → needs_review. OCR deferred.)
+- [x] Low-confidence or invalid → flag for review. (needs_review human sink, 2xx;
+      transient → 5xx → DLQ. Content failures do NOT go to the DLQ. See DECISIONS.)
 - **Done when:** a raw email and an RC PDF both produce a validated structured record.
+      ✅ verified 2026-06-11: `test_consumer_integration.py` (email → processed record),
+      `test_pdf_intake.py` (RC PDF → validated record). Trust boundary proven independent
+      of model behavior (`test_pipeline.py`, `test_validation.py`).
 
 ## Phase 4 — State machine + rate engine
 - [ ] Deal state machine: `new_enquiry → quoted → negotiating ⇄ quoted →
