@@ -10,12 +10,39 @@
 -- instance_id — added then, or provisioned via the Auth admin API.
 
 -- ---------------------------------------------------------------------------
--- Users (auth.users fixtures + app rows)
+-- Users — LOGIN-ABLE seed (Phase 5). DEV/DEMO ONLY: all three share the password
+-- 'freight-demo-pw'. Never use these in production. Full auth.users rows (encrypted
+-- password + confirmed + email provider) plus matching auth.identities so Supabase
+-- Auth password login works on `supabase db reset`.
 -- ---------------------------------------------------------------------------
-insert into auth.users (id, email) values
-    ('a1111111-1111-1111-1111-111111111111', 'admin@freight.local'),
-    ('a2222222-2222-2222-2222-222222222222', 'reviewer1@freight.local'),
-    ('a3333333-3333-3333-3333-333333333333', 'reviewer2@freight.local');
+insert into auth.users (
+    instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+    raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+    confirmation_token, recovery_token, email_change_token_new, email_change
+)
+select
+    '00000000-0000-0000-0000-000000000000', u.id, 'authenticated', 'authenticated',
+    u.email, extensions.crypt('freight-demo-pw', extensions.gen_salt('bf')),
+    now(), '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb,
+    now(), now(), '', '', '', ''
+from (values
+    ('a1111111-1111-1111-1111-111111111111'::uuid, 'admin@freight.local'),
+    ('a2222222-2222-2222-2222-222222222222'::uuid, 'reviewer1@freight.local'),
+    ('a3333333-3333-3333-3333-333333333333'::uuid, 'reviewer2@freight.local')
+) as u(id, email);
+
+insert into auth.identities (
+    provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at
+)
+select
+    u.id::text, u.id,
+    jsonb_build_object('sub', u.id::text, 'email', u.email, 'email_verified', true),
+    'email', now(), now(), now()
+from (values
+    ('a1111111-1111-1111-1111-111111111111'::uuid, 'admin@freight.local'),
+    ('a2222222-2222-2222-2222-222222222222'::uuid, 'reviewer1@freight.local'),
+    ('a3333333-3333-3333-3333-333333333333'::uuid, 'reviewer2@freight.local')
+) as u(id, email);
 
 insert into public.users (id, email, role) values
     ('a1111111-1111-1111-1111-111111111111', 'admin@freight.local', 'admin'),

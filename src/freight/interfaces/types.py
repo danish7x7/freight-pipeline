@@ -34,6 +34,9 @@ class OutboundMessage(BaseModel):
     subject: str
     body: str
     in_reply_to: str | None = None
+    # Custom MIME headers, e.g. X-Freight-Quote-Id — a marker for future send dedup
+    # (closing the at-least-once double-send window; see DECISIONS).
+    headers: dict[str, str] = Field(default_factory=dict)
 
 
 class QueueMessage(BaseModel):

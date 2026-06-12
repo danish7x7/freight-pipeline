@@ -66,6 +66,8 @@ def _to_raw(message: OutboundMessage) -> str:
     if message.in_reply_to:
         mime["In-Reply-To"] = message.in_reply_to
         mime["References"] = message.in_reply_to
+    for name, value in message.headers.items():
+        mime[name] = value
     mime.set_content(message.body)
     return base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
 

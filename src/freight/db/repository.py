@@ -37,6 +37,7 @@ from sqlalchemy import (
     Enum as SAEnum,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -49,6 +50,8 @@ ExtractionStatus = Literal["processed", "needs_review"]
 AttachmentFileType = Literal["pdf", "image", "other"]
 CarrierStatus = Literal["active", "blocked", "unknown"]
 RateSource = Literal["contracted", "computed"]
+UserRole = Literal["reviewer", "admin"]
+SendStatus = Literal["claimed", "sent", "failed"]
 
 _metadata = MetaData()
 
@@ -100,6 +103,16 @@ attachments = Table(
     Column("storage_path", String, nullable=False),
     Column("file_type", _ATTACHMENT_FILE_TYPE, nullable=False),
     Column("mime_type", String),
+)
+
+_USER_ROLE = SAEnum("reviewer", "admin", name="user_role", create_type=False)
+
+users = Table(
+    "users",
+    _metadata,
+    Column("id", UUID(as_uuid=False), primary_key=True),
+    Column("email", String, nullable=False),
+    Column("role", _USER_ROLE, nullable=False),
 )
 
 _CARRIER_STATUS = SAEnum(
@@ -189,6 +202,47 @@ deals = Table(
     Column("updated_at", DateTime(timezone=True)),
 )
 
+_SEND_STATUS = SAEnum(
+    "claimed", "sent", "failed", name="send_status", create_type=False,
+)
+
+sends = Table(
+    "sends",
+    _metadata,
+    Column(
+        "id",
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    ),
+    Column("quote_id", UUID(as_uuid=False), nullable=False, unique=True),
+    Column("deal_id", UUID(as_uuid=False), nullable=False),
+    Column("to_email", String, nullable=False),
+    Column("subject", String, nullable=False),
+    Column("body", Text, nullable=False),
+    Column("status", _SEND_STATUS, nullable=False),
+    Column("gmail_message_id", String),
+    Column("created_by", UUID(as_uuid=False)),
+    Column("sent_at", DateTime(timezone=True)),
+)
+
+audit_log = Table(
+    "audit_log",
+    _metadata,
+    Column(
+        "id",
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    ),
+    Column("actor", UUID(as_uuid=False)),
+    Column("actor_email", String),
+    Column("action", String, nullable=False),
+    Column("entity_type", String, nullable=False),
+    Column("entity_id", UUID(as_uuid=False)),
+    Column("detail", JSONB),
+)
+
 
 class EmailRecord(BaseModel):
     """A persisted email envelope as the ingestion path sees it."""
@@ -210,6 +264,14 @@ class AttachmentRecord(BaseModel):
     storage_path: str
     file_type: AttachmentFileType
     mime_type: str | None
+
+
+class UserRecord(BaseModel):
+    """A persisted app user (for RBAC)."""
+
+    id: str
+    email: str
+    role: UserRole
 
 
 class CarrierRecord(BaseModel):
@@ -240,6 +302,36 @@ class RateRecord(BaseModel):
     source: RateSource
     carrier_id: str | None
     effective_from: datetime
+
+
+class SendClaim(BaseModel):
+    """An outbound-send claim (the idempotency row)."""
+
+    id: str
+    quote_id: str
+    deal_id: str
+    to_email: str
+    subject: str
+    body: str
+    status: SendStatus
+    gmail_message_id: str | None
+
+
+class DealRecord(BaseModel):
+    """A deal row (for send/reject authz)."""
+
+    id: str
+    state: str
+    assigned_reviewer: str | None
+
+
+class QuoteRecord(BaseModel):
+    """A quote row (for send authz + the reply amount)."""
+
+    id: str
+    deal_id: str
+    amount_cents: int
+    currency: str
 
 
 class LaneRate(BaseModel):
@@ -575,6 +667,141 @@ class IngestRepository:
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).mappings().all()
         return [LaneRate.model_validate(dict(row)) for row in rows]
+
+    def get_user(self, uid: str) -> UserRecord | None:
+        """Look up an app user by id (for RBAC: reviewer vs admin)."""
+        stmt = select(users.c.id, users.c.email, users.c.role).where(
+            users.c.id == uid
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return UserRecord.model_validate(dict(row)) if row is not None else None
+
+    def get_deal_email(self, deal_id: str) -> EmailRecord | None:
+        """The inbound email a deal replies to (earliest linked message)."""
+        stmt = (
+            select(
+                email_messages.c.id,
+                email_messages.c.gmail_message_id,
+                email_messages.c.thread_id,
+                email_messages.c.sender,
+                email_messages.c.subject,
+                email_messages.c.body,
+                email_messages.c.received_at,
+                email_messages.c.ingest_status,
+            )
+            .where(email_messages.c.deal_id == deal_id)
+            .order_by(email_messages.c.received_at)
+            .limit(1)
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        if row is None:
+            return None
+        data = dict(row)
+        data["id"] = str(data["id"])
+        return EmailRecord.model_validate(data)
+
+    def get_deal(self, deal_id: str) -> DealRecord | None:
+        """Fetch a deal (for send/reject authz)."""
+        stmt = select(
+            deals.c.id, deals.c.state, deals.c.assigned_reviewer
+        ).where(deals.c.id == deal_id)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return DealRecord.model_validate(dict(row)) if row is not None else None
+
+    def get_quote(self, quote_id: str) -> QuoteRecord | None:
+        """Fetch a quote (for send authz + the reply amount)."""
+        stmt = select(
+            quotes.c.id, quotes.c.deal_id, quotes.c.amount_cents, quotes.c.currency
+        ).where(quotes.c.id == quote_id)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return QuoteRecord.model_validate(dict(row)) if row is not None else None
+
+    def claim_send(
+        self,
+        conn: Connection,
+        *,
+        quote_id: str,
+        deal_id: str,
+        to_email: str,
+        subject: str,
+        body: str,
+        created_by: str | None,
+    ) -> SendClaim:
+        """Claim the send for a quote (UNIQUE(quote_id)); idempotent.
+
+        Returns the claim — newly inserted, or the EXISTING row on conflict (so the
+        caller can recover a 'claimed'-but-unsent row or reject an already-'sent' one).
+        """
+        cols = (
+            sends.c.id,
+            sends.c.quote_id,
+            sends.c.deal_id,
+            sends.c.to_email,
+            sends.c.subject,
+            sends.c.body,
+            sends.c.status,
+            sends.c.gmail_message_id,
+        )
+        stmt = (
+            pg_insert(sends)
+            .values(
+                quote_id=quote_id,
+                deal_id=deal_id,
+                to_email=to_email,
+                subject=subject,
+                body=body,
+                status="claimed",
+                created_by=created_by,
+            )
+            .on_conflict_do_nothing(index_elements=[sends.c.quote_id])
+            .returning(*cols)
+        )
+        row = conn.execute(stmt).mappings().first()
+        if row is None:  # conflict → the send was already claimed
+            row = conn.execute(
+                select(*cols).where(sends.c.quote_id == quote_id)
+            ).mappings().first()
+        assert row is not None
+        return SendClaim.model_validate(dict(row))
+
+    def mark_sent(
+        self, conn: Connection, *, send_id: str, gmail_message_id: str
+    ) -> None:
+        """Record a successful Gmail send on the claim row."""
+        conn.execute(
+            update(sends)
+            .where(sends.c.id == send_id)
+            .values(
+                status="sent", gmail_message_id=gmail_message_id, sent_at=func.now()
+            )
+        )
+
+    def insert_audit(
+        self,
+        conn: Connection,
+        *,
+        actor: str | None,
+        actor_email: str | None,
+        action: str,
+        entity_type: str,
+        entity_id: str | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """Append an audit_log row on the caller's transaction (atomic with state)."""
+        conn.execute(
+            insert(audit_log).values(
+                actor=actor,
+                actor_email=actor_email,
+                action=action,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                detail=detail if detail is not None else {},
+            )
+        )
 
     def get_carrier_by_mc(self, mc_number: str) -> CarrierRecord | None:
         """Look up a carrier by MC number (for the eligibility gate)."""

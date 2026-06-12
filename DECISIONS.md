@@ -1,6 +1,52 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-12 — Phase 5: review console + human-gated send (spine complete)
+**The human gate.** The Gmail send is reached ONLY via an explicit reviewer action
+(`POST /review/send`) — never the pipeline. The model proposed a quote in Phase 4; a
+person disposes here.
+
+**Send is AT-LEAST-ONCE, not exactly-once (record honestly; do NOT overclaim).** The
+claim pattern (UNIQUE(quote_id) `sends` row + audit, committed) prevents a duplicate
+*approval* from double-sending. But there is a real double-send window: if Gmail
+succeeds and the process crashes BEFORE TX-B (`mark_sent`) commits, the row stays
+`claimed` and a retry re-sends. So the guarantee is **at-least-once delivery with
+no-duplicate-on-duplicate-approval**. README/eval must say at-least-once, never
+"exactly-once". MITIGATION IN PLACE: every outbound carries an `X-Freight-Quote-Id`
+marker header (via `OutboundMessage.headers`) so a FUTURE dedup can check the mailbox
+for that marker before re-sending and close the window. The dedup check itself is a
+later task.
+
+**Send flow (dual-write done right).** authz reads (quote→deal; owned-by-reviewer or
+admin; state 'quoted') → TX-A: `claim_send` + audit `email.send.claimed` (atomic;
+already-`sent` → 409) → Gmail send AFTER the claim commits → TX-B: `mark_sent` + audit
+`email.sent`. A Gmail failure leaves `claimed` (502, recoverable); a crashed `claimed`
+row resumes on retry. `sends` is server-side-write-only (reviewers READ via RLS).
+
+**Console↔backend boundary.** The console READS the queue directly from Supabase via RLS
+(reviewer JWT scopes to their deals); all send/reject WRITES go through the FastAPI
+backend (the only sender), which verifies the JWT and acts under the service role —
+preserving the Phase 1 server-side-write-only model.
+
+**Auth: ES256/JWKS SUPERSEDES the fork-3 HS256 choice.** Local (and current) Supabase
+signs access tokens with asymmetric ES256 keys, so the backend verifies against the
+project JWKS (URL derived from `SUPABASE_URL`), validating exp + aud='authenticated' +
+iss. App role (reviewer vs admin) is read from `public.users`, never the token's
+'authenticated' role claim. (Phase 8 carry-forward: verify the deployed project's JWKS +
+issuer at wiring.)
+
+**Seed users are now login-able** (the Phase 1 carry-forward closed): `seed.sql` writes
+full `auth.users` rows (bcrypt `encrypted_password`, confirmed, email provider) + matching
+`auth.identities`. DEV/DEMO password `freight-demo-pw` — never production.
+
+**Verified end to end (real token):** `POST /review/send` with a real Supabase JWT →
+200, `sends`→'sent', audit `email.send.claimed`+`email.sent`. Frontend builds/lints/
+typechecks; browser click-through is manual.
+
+**Carry-forwards:** `web` `npm install` flags 5 audit vulns (transitive) — Phase 6
+`npm audit`. The send dedup-via-marker and `deals.accepted_quote_id` population are
+later tasks.
+
 ## 2026-06-12 — Phase 4: state machine, MC gate, rate engine, atomic finalize
 **State machine + resume.** Pure `advance(state, event, *, held_from=None)` enforces
 `new_enquiry → quoted → negotiating ⇄ quoted → rc_received → contract_signed → scheduled`

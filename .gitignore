@@ -37,3 +37,6 @@ supabase/.temp/
 .idea/
 .vscode/
 *.swp
+
+# Keep the web env template (the .env.* rule above would otherwise ignore it)
+!web/.env.local.example

@@ -120,7 +120,11 @@ def test_send_builds_mime_and_returns_id() -> None:
     messages = _FakeMessages({"messages": []}, {})
     client = GmailApiClient(_FakeService(messages))
     out = OutboundMessage(
-        to="a@b.c", subject="re: rate", body="Here is your quote.", in_reply_to="orig-1"
+        to="a@b.c",
+        subject="re: rate",
+        body="Here is your quote.",
+        in_reply_to="orig-1",
+        headers={"X-Freight-Quote-Id": "quote-9"},
     )
 
     sent_id = client.send(out)
@@ -131,6 +135,7 @@ def test_send_builds_mime_and_returns_id() -> None:
     assert "To: a@b.c" in decoded
     assert "Subject: re: rate" in decoded
     assert "In-Reply-To: orig-1" in decoded
+    assert "X-Freight-Quote-Id: quote-9" in decoded  # dedup marker present
     assert "Here is your quote." in decoded
 
 

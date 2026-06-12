@@ -97,12 +97,19 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
       (atomic deal+quote, MC gate, process-once).
 
 ## Phase 5 — Review UI + send (spine completes)
-- [ ] Next.js + TS + Tailwind + shadcn/ui console; deploy preview on Vercel.
-- [ ] Supabase Auth login; RBAC (reviewer vs admin).
-- [ ] Review queue: model proposal + confidence + rate version; edit/approve/reject.
-- [ ] Idempotent send via Gmail; write audit-log row in the same transaction.
-- **Done when:** log in, review a draft, edit, send — reply goes out exactly once
-      with an audit record. **End-to-end spine is now working.**
+- [x] Next.js + TS + Tailwind console (shadcn-style, hand-wired); Vercel-deployable.
+      (builds/lints/typechecks; full shadcn install + polish → Phase 10.)
+- [x] Supabase Auth login; RBAC (reviewer vs admin). (Seed users login-able;
+      backend verifies the ES256/JWKS token; app role from public.users.)
+- [x] Review queue: model proposal + confidence + rate version; edit/approve/reject.
+      (Console reads via Supabase RLS; actions POST to the backend.)
+- [x] Human-gated send via Gmail; audit atomic with the state change. (Claim pattern:
+      UNIQUE(quote_id) sends row + audit; Gmail after commit; AT-LEAST-ONCE — see
+      DECISIONS. X-Freight-Quote-Id marker for future dedup.)
+- **Done when:** log in, review a draft, edit, send — reply goes out (at-least-once,
+      no double-send on duplicate approval) with an audit record. **Spine works.**
+      ✅ verified 2026-06-12: real-token `POST /review/send` → 200 + sends 'sent' +
+      audit (`test_send.py`/`test_reject.py`/`test_auth_jwt.py`); frontend manual.
 
 ## Phase 6 — Security hardening
 - [ ] Secrets to env/managers; remove any from code; `pip-audit` + `npm audit`.

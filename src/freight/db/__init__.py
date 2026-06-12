@@ -9,21 +9,29 @@ server-side-write-only boundary.
 from freight.db.repository import (
     AttachmentRecord,
     CarrierRecord,
+    DealRecord,
     EmailRecord,
     IngestRepository,
     LaneRate,
+    QuoteRecord,
     RateKey,
     RateRecord,
+    SendClaim,
+    UserRecord,
     make_engine,
 )
 
 __all__ = [
     "AttachmentRecord",
     "CarrierRecord",
+    "DealRecord",
     "EmailRecord",
     "IngestRepository",
     "LaneRate",
+    "QuoteRecord",
     "RateKey",
     "RateRecord",
+    "SendClaim",
+    "UserRecord",
     "make_engine",
 ]
