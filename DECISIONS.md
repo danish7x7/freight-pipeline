@@ -1,6 +1,55 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-12 — Phase 4: state machine, MC gate, rate engine, atomic finalize
+**State machine + resume.** Pure `advance(state, event, *, held_from=None)` enforces
+`new_enquiry → quoted → negotiating ⇄ quoted → rc_received → contract_signed → scheduled`
+(+ rejected/on_hold); skips raise. `on_hold` carries no history, so resume requires a
+stored `held_from` (the active state held from); a deal moved to on_hold records it
+(`deals.held_from`). No/invalid held_from → TransitionError.
+
+**MC eligibility gate.** No MC on a rate enquiry → eligible (proceed); MC active →
+eligible; MC blocked / table-unknown / not-found → on_hold (no engine, no quote — the
+gate runs before `quoted`, so a deal that fails it can't be quoted). Re-enforced before
+contract_signed (later phase). `mc_number` was added to the extraction schema; a
+malformed MC is DROPPED to None (not a hard reject) since the carriers table is the
+allowlist and the gate maps unknown → on_hold.
+
+**Rate engine.** Contracted lookup pins the current contracted version (Model A: filter
+source='contracted', carrier precedence, effective_from/created_at tiebreaker); a miss
+materializes a `source='computed'` row via the transparent placeholder formula and pins
+it, `is_computed=true`. The quote snapshots amount/currency from the pinned rate.
+`quote_for` takes the PRE-FETCHED contracted rate — no in-tx lookup.
+
+**Atomic finalize (the heart of Phase 4).** The consumer (transport) opens
+`repo.begin()`, runs the pre-tx cached contracted lookup (Redis OUT of the tx), and calls
+`deals.finalize(conn, ...)`; the service layer owns the dispatch/gate/quote orchestration;
+the repo is dumb and conn-scoped (`flip_if_queued`, `create_deal`, `link_email`,
+`advance_deal`). One transaction does the process-once flip + deal + computed-rate +
+quote, so redelivery no-ops and a crash can't split the flip from deal creation.
+**Limitation:** the pre-tx contracted lookup uses carrier_id=None (lane-generic) — the
+carrier is resolved by the in-tx gate, so carrier-specific rate precedence for
+rate_request quotes is deferred (precedence still holds for the standalone lookup).
+
+**Intent dispatch (deal scope).** Only `processed` `rate_request` creates a deal+quote.
+Other processed intents (negotiation/rc/contract/other) → `needs_review`
+('intent_not_yet_routable'), NO deal — thread-linking is later-phase, and a silent
+`processed` flip would make a dropped email look handled. The Phase 3 extract-before-claim
+tradeoff stands (a rare concurrent redelivery can incur a duplicate LLM call; only one
+write lands; the LLM has no side effects).
+
+**Cache invalidation coupling.** Only CONTRACTED-version inserts invalidate the rate cache
+(the surcharge job, any admin contracted insert). The engine's `source='computed'`
+materialization must NOT invalidate — computed rows are excluded from the cached
+contracted lookup, so they can't stale it.
+
+**Surcharge job.** Re-versions each current contracted lane by a delta — always an INSERT
+(rates append-only; forbid_mutation blocks overwrites). Verified: append (+1 row, prior
+version intact), new version becomes current.
+
+**Validator fix.** The equipment format gate now allows `_` so the canonical `dry_van`
+passes (injection punctuation like `;` still rejected before canonicalization).
+
 ## 2026-06-11 — Phase 3 extraction: trust boundary, confidence, routing, PDF
 **Trust boundary (the injection defense).** Flow is `RawExtraction` (permissive,
 UNTRUSTED LLM output) → deterministic gate (`validation.validate`) → `ValidatedExtraction`

@@ -8,11 +8,15 @@ the committed claim and the publish, which leaves a ``received`` row that the
 reconciliation sweep (``list_stuck_received``) re-enqueues.
 """
 
+from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -20,8 +24,11 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    and_,
     create_engine,
+    func,
     insert,
+    or_,
     select,
     text,
     update,
@@ -30,7 +37,7 @@ from sqlalchemy import (
     Enum as SAEnum,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 
 from freight.interfaces.types import InboundMessage
@@ -40,6 +47,8 @@ Intent = Literal["rate_request", "negotiation", "rc", "contract", "other"]
 # Terminal extraction outcomes the consumer writes (both return 2xx — see DECISIONS).
 ExtractionStatus = Literal["processed", "needs_review"]
 AttachmentFileType = Literal["pdf", "image", "other"]
+CarrierStatus = Literal["active", "blocked", "unknown"]
+RateSource = Literal["contracted", "computed"]
 
 _metadata = MetaData()
 
@@ -65,6 +74,7 @@ email_messages = Table(
     ),
     Column("gmail_message_id", String, nullable=False, unique=True),
     Column("thread_id", String),
+    Column("deal_id", UUID(as_uuid=False)),
     Column("sender", String, nullable=False),
     Column("subject", Text),
     Column("body", Text),
@@ -92,6 +102,93 @@ attachments = Table(
     Column("mime_type", String),
 )
 
+_CARRIER_STATUS = SAEnum(
+    "active", "blocked", "unknown", name="carrier_status", create_type=False,
+)
+
+carriers = Table(
+    "carriers",
+    _metadata,
+    Column("id", UUID(as_uuid=False), primary_key=True),
+    Column("mc_number", String, nullable=False),
+    Column("name", String, nullable=False),
+    Column("status", _CARRIER_STATUS, nullable=False),
+)
+
+_EQUIPMENT_TYPE = SAEnum(
+    "dry_van", "reefer", "flatbed", "step_deck", "power_only", "other",
+    name="equipment_type", create_type=False,
+)
+_RATE_SOURCE = SAEnum(
+    "contracted", "computed", name="rate_source", create_type=False,
+)
+
+rates = Table(
+    "rates",
+    _metadata,
+    Column(
+        "id",
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    ),
+    Column("origin_city", String, nullable=False),
+    Column("origin_state", String, nullable=False),
+    Column("dest_city", String, nullable=False),
+    Column("dest_state", String, nullable=False),
+    Column("equipment", _EQUIPMENT_TYPE, nullable=False),
+    Column("carrier_id", UUID(as_uuid=False)),
+    Column("source", _RATE_SOURCE, nullable=False),
+    Column("amount_cents", BigInteger, nullable=False),
+    Column("currency", String, nullable=False),
+    Column("effective_from", DateTime(timezone=True), nullable=False),
+    Column("created_by", UUID(as_uuid=False)),
+    Column("created_at", DateTime(timezone=True)),
+)
+
+quotes = Table(
+    "quotes",
+    _metadata,
+    Column(
+        "id",
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    ),
+    Column("deal_id", UUID(as_uuid=False), nullable=False),
+    Column("rate_id", UUID(as_uuid=False), nullable=False),
+    Column("amount_cents", BigInteger, nullable=False),
+    Column("currency", String, nullable=False),
+    Column("is_computed", Boolean, nullable=False),
+)
+
+_DEAL_STATE = SAEnum(
+    "new_enquiry", "quoted", "negotiating", "rc_received", "contract_signed",
+    "scheduled", "rejected", "on_hold", name="deal_state", create_type=False,
+)
+
+deals = Table(
+    "deals",
+    _metadata,
+    Column(
+        "id",
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    ),
+    Column("state", _DEAL_STATE, nullable=False),
+    Column("assigned_reviewer", UUID(as_uuid=False)),
+    Column("carrier_id", UUID(as_uuid=False)),
+    Column("origin_city", String),
+    Column("origin_state", String),
+    Column("dest_city", String),
+    Column("dest_state", String),
+    Column("equipment", _EQUIPMENT_TYPE),
+    Column("held_from", _DEAL_STATE),
+    Column("accepted_quote_id", UUID(as_uuid=False)),
+    Column("updated_at", DateTime(timezone=True)),
+)
+
 
 class EmailRecord(BaseModel):
     """A persisted email envelope as the ingestion path sees it."""
@@ -113,6 +210,49 @@ class AttachmentRecord(BaseModel):
     storage_path: str
     file_type: AttachmentFileType
     mime_type: str | None
+
+
+class CarrierRecord(BaseModel):
+    """A persisted carrier row (for the MC eligibility gate)."""
+
+    id: str
+    mc_number: str
+    status: CarrierStatus
+
+
+@dataclass(frozen=True)
+class RateKey:
+    """The lane key a rate is looked up by."""
+
+    origin_city: str
+    origin_state: str
+    dest_city: str
+    dest_state: str
+    equipment: str
+
+
+class RateRecord(BaseModel):
+    """A persisted rate version (the row a quote pins)."""
+
+    id: str
+    amount_cents: int
+    currency: str
+    source: RateSource
+    carrier_id: str | None
+    effective_from: datetime
+
+
+class LaneRate(BaseModel):
+    """The current contracted rate for a lane key (for the surcharge job)."""
+
+    origin_city: str
+    origin_state: str
+    dest_city: str
+    dest_state: str
+    equipment: str
+    carrier_id: str | None
+    amount_cents: int
+    currency: str
 
 
 def make_engine(database_url: str) -> Engine:
@@ -199,21 +339,25 @@ class IngestRepository:
         with self._engine.connect() as conn:
             return [r[0] for r in conn.execute(stmt)]
 
-    def process_once_extraction(
+    def begin(self) -> AbstractContextManager[Connection]:
+        """Open a transaction; the caller owns commit/rollback (the finalize tx)."""
+        return self._engine.begin()
+
+    def flip_if_queued(
         self,
-        gmail_message_id: str,
+        conn: Connection,
         *,
+        gmail_message_id: str,
         intent: Intent | None,
         confidence: float | None,
         extracted: dict[str, Any] | None,
         status: ExtractionStatus,
         review_reason: str | None = None,
     ) -> bool:
-        """Atomically write the extraction result iff the row is still 'queued'.
+        """Conditional UPDATE on the caller's tx: write the result iff still 'queued'.
 
-        Returns True if THIS delivery won (1 row updated). 0 rows => another delivery
-        already processed it => the caller acks and skips. This conditional UPDATE is
-        the process-once guard (CLAUDE.md "never process twice").
+        Returns True if THIS delivery won (1 row). 0 rows => already processed => skip.
+        This is the process-once guard (CLAUDE.md "never process twice").
         """
         stmt = (
             update(email_messages)
@@ -227,9 +371,221 @@ class IngestRepository:
                 review_reason=review_reason,
             )
         )
+        return conn.execute(stmt).rowcount == 1
+
+    def process_once_extraction(
+        self,
+        gmail_message_id: str,
+        *,
+        intent: Intent | None,
+        confidence: float | None,
+        extracted: dict[str, Any] | None,
+        status: ExtractionStatus,
+        review_reason: str | None = None,
+    ) -> bool:
+        """Standalone process-once write in its own transaction (delegates flip)."""
         with self._engine.begin() as conn:
-            result = conn.execute(stmt)
-        return result.rowcount == 1
+            return self.flip_if_queued(
+                conn,
+                gmail_message_id=gmail_message_id,
+                intent=intent,
+                confidence=confidence,
+                extracted=extracted,
+                status=status,
+                review_reason=review_reason,
+            )
+
+    def create_deal(
+        self, conn: Connection, *, state: str, extracted: dict[str, Any]
+    ) -> str:
+        """Create a deal from extracted route fields; return its id."""
+        stmt = (
+            insert(deals)
+            .values(
+                state=state,
+                origin_city=extracted.get("origin_city"),
+                origin_state=extracted.get("origin_state"),
+                dest_city=extracted.get("dest_city"),
+                dest_state=extracted.get("dest_state"),
+                equipment=extracted.get("equipment"),
+            )
+            .returning(deals.c.id)
+        )
+        return str(conn.execute(stmt).scalar_one())
+
+    def link_email(
+        self, conn: Connection, *, gmail_message_id: str, deal_id: str
+    ) -> None:
+        """Link an email to its deal (sets email_messages.deal_id)."""
+        conn.execute(
+            update(email_messages)
+            .where(email_messages.c.gmail_message_id == gmail_message_id)
+            .values(deal_id=deal_id)
+        )
+
+    def advance_deal(
+        self,
+        conn: Connection,
+        *,
+        deal_id: str,
+        state: str,
+        held_from: str | None = None,
+    ) -> None:
+        """Set a deal's state (and held_from when moving to on_hold)."""
+        conn.execute(
+            update(deals)
+            .where(deals.c.id == deal_id)
+            .values(state=state, held_from=held_from, updated_at=func.now())
+        )
+
+    def current_contracted_rate(
+        self, key: RateKey, carrier_id: str | None = None
+    ) -> RateRecord | None:
+        """Return the current contracted rate for a lane (Model A), or None.
+
+        Filters source='contracted' and effective_from <= now(). Carrier precedence:
+        a carrier-specific row wins over the lane-generic (carrier_id IS NULL) row; ties
+        broken by effective_from DESC, created_at DESC. Computed rows are excluded.
+        """
+        conditions = [
+            rates.c.origin_city == key.origin_city,
+            rates.c.origin_state == key.origin_state,
+            rates.c.dest_city == key.dest_city,
+            rates.c.dest_state == key.dest_state,
+            rates.c.equipment == key.equipment,
+            rates.c.source == "contracted",
+            rates.c.effective_from <= func.now(),
+        ]
+        order = [rates.c.effective_from.desc(), rates.c.created_at.desc()]
+        if carrier_id is not None:
+            conditions.append(
+                or_(rates.c.carrier_id == carrier_id, rates.c.carrier_id.is_(None))
+            )
+            # carrier-specific (carrier_id IS NOT NULL) sorts before lane-generic.
+            order.insert(0, rates.c.carrier_id.is_(None).asc())
+        else:
+            conditions.append(rates.c.carrier_id.is_(None))
+
+        stmt = (
+            select(
+                rates.c.id,
+                rates.c.amount_cents,
+                rates.c.currency,
+                rates.c.source,
+                rates.c.carrier_id,
+                rates.c.effective_from,
+            )
+            .where(and_(*conditions))
+            .order_by(*order)
+            .limit(1)
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return RateRecord.model_validate(dict(row)) if row is not None else None
+
+    def insert_rate_version(
+        self,
+        conn: Connection,
+        *,
+        key: RateKey,
+        source: RateSource,
+        amount_cents: int,
+        currency: str,
+        carrier_id: str | None = None,
+    ) -> str:
+        """Append a rate version on the caller's transaction; return its id.
+
+        REQUIRES a Connection — the caller owns the transaction and the commit. rates is
+        append-only (effective_from defaults to now()); this is always an INSERT.
+        """
+        stmt = (
+            insert(rates)
+            .values(
+                origin_city=key.origin_city,
+                origin_state=key.origin_state,
+                dest_city=key.dest_city,
+                dest_state=key.dest_state,
+                equipment=key.equipment,
+                carrier_id=carrier_id,
+                source=source,
+                amount_cents=amount_cents,
+                currency=currency,
+            )
+            .returning(rates.c.id)
+        )
+        return str(conn.execute(stmt).scalar_one())
+
+    def insert_quote(
+        self,
+        conn: Connection,
+        *,
+        deal_id: str,
+        rate_id: str,
+        amount_cents: int,
+        currency: str,
+        is_computed: bool,
+    ) -> str:
+        """Insert a quote pinning ``rate_id`` on the caller's tx; return its id.
+
+        ``amount_cents``/``currency`` are the snapshot copied from the pinned rate.
+        """
+        stmt = (
+            insert(quotes)
+            .values(
+                deal_id=deal_id,
+                rate_id=rate_id,
+                amount_cents=amount_cents,
+                currency=currency,
+                is_computed=is_computed,
+            )
+            .returning(quotes.c.id)
+        )
+        return str(conn.execute(stmt).scalar_one())
+
+    def list_contracted_lanes(self) -> list[LaneRate]:
+        """Current contracted rate per lane key (DISTINCT ON key, newest version)."""
+        key_cols = [
+            rates.c.origin_state,
+            rates.c.origin_city,
+            rates.c.dest_state,
+            rates.c.dest_city,
+            rates.c.equipment,
+            rates.c.carrier_id,
+        ]
+        stmt = (
+            select(
+                rates.c.origin_city,
+                rates.c.origin_state,
+                rates.c.dest_city,
+                rates.c.dest_state,
+                rates.c.equipment,
+                rates.c.carrier_id,
+                rates.c.amount_cents,
+                rates.c.currency,
+            )
+            .where(rates.c.source == "contracted")
+            .where(rates.c.effective_from <= func.now())
+            .distinct(*key_cols)
+            .order_by(
+                *key_cols,
+                rates.c.effective_from.desc(),
+                rates.c.created_at.desc(),
+            )
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [LaneRate.model_validate(dict(row)) for row in rows]
+
+    def get_carrier_by_mc(self, mc_number: str) -> CarrierRecord | None:
+        """Look up a carrier by MC number (for the eligibility gate)."""
+        stmt = select(
+            carriers.c.id, carriers.c.mc_number, carriers.c.status
+        ).where(carriers.c.mc_number == mc_number)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        if row is None:
+            return None
+        return CarrierRecord.model_validate({**dict(row), "id": str(row["id"])})
 
     def get_attachments(self, email_message_id: str) -> list[AttachmentRecord]:
         """Return attachment rows for an email (used by PDF intake)."""

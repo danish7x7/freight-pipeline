@@ -44,8 +44,9 @@ _US_STATES: frozenset[str] = frozenset(_US_STATE_NAMES.values())
 # City: a name, not free text. Reject injection punctuation / newlines / over-length.
 _CITY_RE = re.compile(r"^[A-Za-z .,'\-]{1,64}$")
 # Equipment: bounded, name-like; rejected before keyword canonicalization if it carries
-# anything but letters/digits/space/'/-/"/. (so "reefer; DROP" is rejected, not kept).
-_EQUIPMENT_RE = re.compile(r"^[A-Za-z0-9 '\".\-]{1,32}$")
+# anything but letters/digits/space/'/"/./-/_ (so "reefer; DROP" is rejected, not kept,
+# while the canonical "dry_van" and natural "53' reefer" both pass).
+_EQUIPMENT_RE = re.compile(r"^[A-Za-z0-9 '\"._-]{1,32}$")
 # Weight: digits with optional commas and an optional lbs suffix — nothing else.
 _WEIGHT_RE = re.compile(r"^([\d,]+)\s*(lbs?\.?)?$")
 
@@ -70,6 +71,7 @@ def validate(raw: RawExtraction) -> ValidatedExtraction | ValidationFailure:
     dest_city = _validate_city(raw.dest_city, "dest_city", reasons)
     equipment = _validate_equipment(raw.equipment, reasons)
     weight = _validate_weight(raw.weight_lbs, reasons)
+    mc_number = _validate_mc(raw.mc_number)
 
     if reasons or intent is None:
         return ValidationFailure(reasons=reasons)
@@ -81,6 +83,7 @@ def validate(raw: RawExtraction) -> ValidatedExtraction | ValidationFailure:
         dest_state=dest_state,
         equipment=equipment,
         weight_lbs=weight,
+        mc_number=mc_number,
     )
 
 
@@ -146,6 +149,20 @@ def _canon_equipment(key: str) -> Equipment | None:
     if "van" in key or "dry" in key:
         return "dry_van"
     return None
+
+
+def _validate_mc(value: str | None) -> str | None:
+    """Normalize an MC number, or drop it (None) if malformed.
+
+    A malformed MC is dropped, NOT a hard reject of the whole extraction: the deal then
+    proceeds as if no MC was given (the fork-2 default), and the carriers table is the
+    real allowlist — the eligibility gate maps an unknown MC to on_hold.
+    """
+    if value is None or not value.strip():
+        return None
+    cleaned = value.strip().upper().replace(" ", "")
+    match = re.fullmatch(r"(?:MC)?(\d{4,8})", cleaned)
+    return f"MC{match.group(1)}" if match is not None else None
 
 
 def _validate_weight(value: str | int | None, reasons: list[str]) -> int | None:

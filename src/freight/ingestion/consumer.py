@@ -1,30 +1,24 @@
-"""The ingestion consumer — the permanent QStash target handler.
+"""The ingestion consumer — the permanent QStash target handler (transport only).
 
 Per delivery:
-1. re-fetch the committed envelope row by id; validate the envelope (row + sender);
-2. run extraction (one LLM call → deterministic gate → routing);
-3. write the outcome via the process-once conditional UPDATE (WHERE ingest_status=
-   'queued'): the delivery that flips the row wins; 0 rows → already processed → skip.
+1. re-fetch the committed envelope row; validate the envelope (row + sender);
+2. resolve content (PDF attachment takes priority over the body) and run extraction;
+3. pre-tx: cached contracted lookup (Redis OUT of the transaction);
+4. open the finalize transaction and call ``deals.finalize`` — it owns the process-once
+   flip + deal/quote logic. The context manager commits/rolls back.
 
-Error mapping (the precise permanent-vs-transient form — see DECISIONS):
-- envelope invalid / HFTransientError / DB error → RAISE → /ingest returns 5xx →
-  QStash retries → DLQ on exhaustion (transient/infra);
-- a content outcome (processed OR needs_review) is written and we return normally →
-  /ingest returns 2xx → NOT retried (the consumer succeeded at routing).
+Error mapping (see DECISIONS): envelope invalid / HFTransientError / DB error → RAISE →
+/ingest 5xx → QStash retries → DLQ. A written outcome (processed or needs_review)
+returns normally → 2xx → not retried.
 """
 
-from typing import Any, Protocol
-
-from freight.db.repository import (
-    AttachmentRecord,
-    EmailRecord,
-    ExtractionStatus,
-    Intent,
-)
+from freight.db.repository import EmailRecord, IngestRepository, RateRecord
+from freight.deals import finalize, rate_key_from
 from freight.extraction import ExtractionOutcome, extract
 from freight.interfaces import LLMClient
 from freight.interfaces.types import QueueMessage
 from freight.pdf import StorageReader, UnconfiguredStorageReader, extract_text
+from freight.rates.lookup import RateLookup
 
 
 class IngestError(Exception):
@@ -42,37 +36,22 @@ def _review(reason: str) -> ExtractionOutcome:
     )
 
 
-class _ExtractionRepo(Protocol):
-    """The slice of the repository the consumer depends on."""
-
-    def get_by_gmail_id(self, gmail_message_id: str) -> EmailRecord | None: ...
-
-    def get_attachments(self, email_message_id: str) -> list[AttachmentRecord]: ...
-
-    def process_once_extraction(
-        self,
-        gmail_message_id: str,
-        *,
-        intent: Intent | None,
-        confidence: float | None,
-        extracted: dict[str, Any] | None,
-        status: ExtractionStatus,
-        review_reason: str | None = None,
-    ) -> bool: ...
-
-
 class IngestConsumer:
-    """Validate the envelope, extract, and write the result process-once."""
+    """Validate the envelope, extract, then finalize (deal/quote) process-once."""
 
     def __init__(
         self,
-        repo: _ExtractionRepo,
+        repo: IngestRepository,
         llm: LLMClient,
+        *,
         storage: StorageReader | None = None,
+        rate_lookup: RateLookup | None = None,
     ) -> None:
         self._repo = repo
         self._llm = llm
         self._storage = storage or UnconfiguredStorageReader()
+        # The cached lookup (or the repo itself) for the pre-tx contracted read.
+        self._rate_lookup: RateLookup = rate_lookup or repo
 
     async def handle(self, message: QueueMessage) -> None:
         """Process one delivery. Raises only on transient/infra faults (→ retry)."""
@@ -84,12 +63,28 @@ class IngestConsumer:
 
         text, review_reason = self._resolve_content(record)
         if review_reason is not None:
-            self._write(record.gmail_message_id, _review(review_reason))
-            return
+            outcome = _review(review_reason)
+        else:
+            # HFTransientError (cold-start/429/network) propagates → 5xx → retry.
+            outcome = await extract(self._llm, record.subject, text)
 
-        # HFTransientError (cold-start/429/network) propagates → 5xx → retry.
-        outcome = await extract(self._llm, record.subject, text)
-        self._write(record.gmail_message_id, outcome)
+        contracted = self._lookup_contracted(outcome)
+
+        with self._repo.begin() as conn:
+            finalize(
+                conn,
+                self._repo,
+                gmail_message_id=record.gmail_message_id,
+                outcome=outcome,
+                contracted_rate=contracted,
+            )
+
+    def _lookup_contracted(self, outcome: ExtractionOutcome) -> RateRecord | None:
+        """Pre-tx contracted rate read (only for a quotable rate_request)."""
+        if outcome.status != "processed" or outcome.intent != "rate_request":
+            return None
+        key = rate_key_from(outcome.extracted or {})
+        return self._rate_lookup.current_contracted_rate(key)
 
     def _resolve_content(self, record: EmailRecord) -> tuple[str | None, str | None]:
         """Pick the extraction source. A PDF attachment takes priority over the body.
@@ -108,14 +103,3 @@ class IngestConsumer:
                 return None, "no_text_layer"
             return text, None
         return record.body, None
-
-    def _write(self, gmail_message_id: str, outcome: ExtractionOutcome) -> None:
-        # Process-once: only the delivery that flips 'queued' does the write.
-        self._repo.process_once_extraction(
-            gmail_message_id,
-            intent=outcome.intent,
-            confidence=outcome.confidence,
-            extracted=outcome.extracted,
-            status=outcome.status,
-            review_reason=outcome.review_reason,
-        )

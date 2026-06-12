@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # --- Redis (Upstash) ---
     redis_url: str = "redis://localhost:6379/0"
 
+    # --- Rate engine ---
+    fuel_surcharge_delta_cents: int = 1000  # added to each lane per surcharge run
+
     # --- Upstash QStash ---
     qstash_token: str = ""
     qstash_url: str = "https://qstash.upstash.io"

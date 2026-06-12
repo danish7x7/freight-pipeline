@@ -73,21 +73,28 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
 - [x] Low-confidence or invalid → flag for review. (needs_review human sink, 2xx;
       transient → 5xx → DLQ. Content failures do NOT go to the DLQ. See DECISIONS.)
 - **Done when:** a raw email and an RC PDF both produce a validated structured record.
-      ✅ verified 2026-06-11: `test_consumer_integration.py` (email → processed record),
-      `test_pdf_intake.py` (RC PDF → validated record). Trust boundary proven independent
+      ✅ verified 2026-06-11: `test_consumer.py` (email → processed record),
+      `test_pdf_intake.py` (PDF text → extraction). Trust boundary proven independent
       of model behavior (`test_pipeline.py`, `test_validation.py`).
 
 ## Phase 4 — State machine + rate engine
-- [ ] Deal state machine: `new_enquiry → quoted → negotiating ⇄ quoted →
+- [x] Deal state machine: `new_enquiry → quoted → negotiating ⇄ quoted →
       rc_received → contract_signed → scheduled`, plus `rejected`/`on_hold`.
-- [ ] Carrier/MC eligibility gate before `quoted` and `contract_signed`
-      (unknown/blocked → `on_hold` for human).
-- [ ] Rate engine: contracted-route lookup vs internal formula fallback;
-      flag generated quotes; quote pins the exact `rate_id`.
-- [ ] Redis cache for hot routes + invalidate on new rate version.
-- [ ] Fuel-surcharge update job (GitHub Actions cron) writing new rate versions.
+      (Pure `advance()`; skips raise; resume via stored `held_from`.)
+- [x] Carrier/MC eligibility gate before `quoted` and `contract_signed`
+      (unknown/blocked → `on_hold`). (No-MC→proceed; re-gate before contract.)
+- [x] Rate engine: contracted-route lookup vs internal formula fallback;
+      flag generated quotes; quote pins the exact `rate_id`. (Computed → materialized
+      `source='computed'` row, pinned, `is_computed`. Atomic finalize in service layer.)
+- [x] Redis cache for hot routes + invalidate on new rate version. (Fail-open;
+      lane-prefix SCAN; only contracted inserts invalidate. See DECISIONS.)
+- [x] Fuel-surcharge update job (GitHub Actions cron) writing new rate versions.
+      (`*/`daily; curls `/jobs/surcharge`; inert until Phase 8.)
 - **Done when:** operated route returns a contracted rate; new route returns a
       flagged computed rate; a surcharge update creates a version, not an overwrite.
+      ✅ verified 2026-06-12: `test_rate_lookup.py` (contracted), `test_rate_engine.py`
+      (flagged computed), `test_surcharge.py` (append not overwrite), `test_finalize.py`
+      (atomic deal+quote, MC gate, process-once).
 
 ## Phase 5 — Review UI + send (spine completes)
 - [ ] Next.js + TS + Tailwind + shadcn/ui console; deploy preview on Vercel.

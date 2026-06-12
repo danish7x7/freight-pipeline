@@ -1,0 +1,27 @@
+name: fuel-surcharge
+
+# Daily fuel-surcharge update: appends a new contracted rate version per lane.
+# Cadence is best-effort (GitHub scheduling); correctness does not depend on it —
+# rates are append-only and versioned, so a missed run just defers the surcharge.
+# Use workflow_dispatch to run on demand.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  surcharge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the surcharge update
+        env:
+          SURCHARGE_ENDPOINT: ${{ secrets.SURCHARGE_ENDPOINT }}
+          SURCHARGE_TOKEN: ${{ secrets.SURCHARGE_TOKEN }}
+        run: |
+          # Inert until the Phase 8 deploy provides SURCHARGE_ENDPOINT.
+          if [ -z "$SURCHARGE_ENDPOINT" ]; then
+            echo "SURCHARGE_ENDPOINT not set — inert until Phase 8 deploy. Skipping."
+            exit 0
+          fi
+          curl -fsS -X POST "$SURCHARGE_ENDPOINT" \
+            -H "Authorization: Bearer $SURCHARGE_TOKEN"

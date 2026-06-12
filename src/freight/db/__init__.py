@@ -8,9 +8,22 @@ server-side-write-only boundary.
 
 from freight.db.repository import (
     AttachmentRecord,
+    CarrierRecord,
     EmailRecord,
     IngestRepository,
+    LaneRate,
+    RateKey,
+    RateRecord,
     make_engine,
 )
 
-__all__ = ["AttachmentRecord", "EmailRecord", "IngestRepository", "make_engine"]
+__all__ = [
+    "AttachmentRecord",
+    "CarrierRecord",
+    "EmailRecord",
+    "IngestRepository",
+    "LaneRate",
+    "RateKey",
+    "RateRecord",
+    "make_engine",
+]

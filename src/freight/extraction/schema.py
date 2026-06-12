@@ -25,6 +25,7 @@ class RawExtraction(BaseModel):
     dest_state: str | None = None
     equipment: str | None = None
     weight_lbs: str | int | None = None
+    mc_number: str | None = None
 
 
 class ValidatedExtraction(BaseModel):
@@ -42,3 +43,4 @@ class ValidatedExtraction(BaseModel):
     dest_state: str | None = None
     equipment: Equipment | None = None
     weight_lbs: int | None = None
+    mc_number: str | None = None

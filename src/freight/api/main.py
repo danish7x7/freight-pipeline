@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from freight import __version__
 from freight.api.routes.ingest import router as ingest_router
 from freight.api.routes.poll import router as poll_router
+from freight.api.routes.surcharge import router as surcharge_router
 
 
 def create_app() -> FastAPI:
@@ -19,6 +20,7 @@ def create_app() -> FastAPI:
 
     app.include_router(ingest_router)
     app.include_router(poll_router)
+    app.include_router(surcharge_router)
     return app
 
 
