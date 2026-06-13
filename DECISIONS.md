@@ -1,6 +1,33 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-12 — Phase 6 kickoff: four security forks resolved (option 1)
+**Decision:** Phase 6 (security hardening) starts with these forks locked, all
+right-sized for a low-volume synthetic showcase:
+- **Cron auth** (`/poll`, `/jobs/surcharge`): shared-secret `CRON_SECRET` bearer,
+  constant-time compare (GitHub Secrets + backend env only). Not GitHub OIDC.
+  `/ingest` uses QStash `Upstash-Signature` (separate mechanism, separate source).
+- **PII**: at-rest baseline (Supabase disk encryption) + TLS in transit. No
+  column-level pgcrypto — data is synthetic; pgcrypto on sender/to_email/body/
+  actor_email would break RLS joins, indexing, and audit snapshots. Real-PII prod
+  delta noted in THREAT_MODEL.md.
+- **Rate limiter**: fail-open on Redis unavailable (consistent with cache
+  discipline; auth gates are the primary access control, limiter is secondary).
+- **Adversarial containment run**: deterministic 'fooled-model' mock — proves the
+  *validation gate* contains injection regardless of model behavior. Real-model
+  accuracy is Phase 9 (corpus run merged with 6.5).
+
+Task breakdown: 6.0 confirm append-only + secret audit → 6.1 /ingest QStash sig →
+6.2 cron CRON_SECRET → 6.3 CORS lockdown → 6.4 rate limiter + LLM guard → 6.5
+containment run → 6.6 pip-audit + npm audit → 6.7 THREAT_MODEL.md → 6.8 close out.
+
+**Why:** Recorded now (not at 6.8 close-out) because the build session is being
+`/clear`-ed at the 6.0 boundary to shed stale phase 0–5 context. The on-disk
+record must carry the resolved forks so a fresh session doesn't re-litigate them.
+
+**Trade-off:** Decisions logged before the work they govern is complete; if a fork
+proves wrong mid-phase, amend with a follow-up entry rather than editing this one.
+
 ## 2026-06-12 — Phase 5: review console + human-gated send (spine complete)
 **The human gate.** The Gmail send is reached ONLY via an explicit reviewer action
 (`POST /review/send`) — never the pipeline. The model proposed a quote in Phase 4; a
