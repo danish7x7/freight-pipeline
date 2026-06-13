@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     # Empty => no origins allowed (fail-closed; browser CORS blocked). Only the
     # /review/* routes are browser-facing — the cron/QStash routes are server-to-server.
     cors_allow_origins: str = "http://localhost:3000"
+    # Rate limiting (Phase 6.4). Secondary to the auth gates and FAIL-OPEN on a Redis
+    # outage — never the primary access control. ``public_rate_limit_per_minute`` caps
+    # per-client hits on each external POST route; ``llm_calls_per_minute`` is the
+    # global LLM-call budget (a trip is transient backpressure → retry). Disable for
+    # local/dev with ``rate_limit_enabled=false``.
+    rate_limit_enabled: bool = True
+    public_rate_limit_per_minute: int = 120
+    llm_calls_per_minute: int = 60
 
     # --- Interface selection (swap impls by config, not by code) ---
     llm_backend: Literal["mock", "hf"] = "mock"

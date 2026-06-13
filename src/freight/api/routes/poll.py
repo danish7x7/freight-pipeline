@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends
 from freight.config import get_settings
 from freight.ingestion.poller import Poller, build_poller
 from freight.security.cron_auth import require_cron_secret
+from freight.security.http_rate_limit import RateLimit
 
 router = APIRouter()
 
@@ -29,7 +30,10 @@ def get_poller() -> Poller:
 PollerDep = Annotated[Poller, Depends(get_poller)]
 
 
-@router.post("/poll", dependencies=[Depends(require_cron_secret)])
+@router.post(
+    "/poll",
+    dependencies=[Depends(RateLimit("poll")), Depends(require_cron_secret)],
+)
 def poll(poller: PollerDep) -> dict[str, int]:
     result = asyncio.run(poller.poll())
     return {"enqueued": result.enqueued, "recovered": result.recovered}

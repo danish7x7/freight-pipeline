@@ -13,6 +13,8 @@ from freight.mocks.gmail import MockGmailClient
 from freight.mocks.llm import MockLLMClient
 from freight.mocks.queue import InMemoryQueue
 from freight.queue import QStashQueue
+from freight.security.llm_guard import GuardedLLMClient
+from freight.security.rate_limit import RateLimiter
 
 
 def build_gmail_client(settings: Settings | None = None) -> GmailClient:
@@ -28,9 +30,18 @@ def build_llm_client(settings: Settings | None = None) -> LLMClient:
     settings = settings or get_settings()
     match settings.llm_backend:
         case "mock":
-            return MockLLMClient()
+            inner: LLMClient = MockLLMClient()
         case "hf":
-            return HFLLMClient.from_settings(settings)
+            inner = HFLLMClient.from_settings(settings)
+    # Wrap every backend in the global LLM-call budget guard (no call-site change).
+    # Disabled => no budget; the guard then just delegates.
+    if not settings.rate_limit_enabled:
+        return inner
+    return GuardedLLMClient(
+        inner,
+        RateLimiter.from_url(settings.redis_url),
+        limit=settings.llm_calls_per_minute,
+    )
 
 
 def build_queue(settings: Settings | None = None) -> Queue:

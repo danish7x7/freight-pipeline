@@ -13,6 +13,7 @@ from freight.config import get_settings
 from freight.db.repository import IngestRepository, make_engine
 from freight.factories import build_gmail_client
 from freight.interfaces import GmailClient
+from freight.security.http_rate_limit import RateLimit
 from freight.sending import SendError, reject_deal, send_quote
 
 router = APIRouter()
@@ -40,7 +41,7 @@ class RejectRequest(BaseModel):
     deal_id: str
 
 
-@router.post("/review/send")
+@router.post("/review/send", dependencies=[Depends(RateLimit("review_send"))])
 def review_send(
     request: SendRequest, reviewer: ReviewerDep, deps: ReviewDeps
 ) -> dict[str, str]:
@@ -57,7 +58,7 @@ def review_send(
     }
 
 
-@router.post("/review/reject")
+@router.post("/review/reject", dependencies=[Depends(RateLimit("review_reject"))])
 def review_reject(
     request: RejectRequest, reviewer: ReviewerDep, deps: ReviewDeps
 ) -> dict[str, str]:

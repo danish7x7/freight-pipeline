@@ -1,6 +1,54 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-13 — Phase 6.4: rate limiter (public API) + global LLM-call guard
+**One fail-open primitive.** `RateLimiter` (`freight.security.rate_limit`) is a fixed-
+window counter over Redis (`INCR`; arm `EXPIRE` on the first hit of a window). It is
+SECONDARY to the auth gates and FAIL-OPEN: any `RedisError` → `allow` returns True
+(proceed), short 1s timeouts so an outage fails open FAST — same discipline as the
+idempotency/rate caches, and exactly the decided fork. `limit<=0` disables. Both the
+HTTP limiter and the LLM guard share this one primitive (the primitive stays FastAPI-free
+so the guard can import it).
+
+**HTTP limiting runs BEFORE auth.** `RateLimit(scope)` (`freight.security.http_rate_limit`)
+is a route-level dependency keyed `rl:{scope}:{client_ip}`; 429 over the per-minute cap
+(`public_rate_limit_per_minute`, default 120). Applied to every externally reachable POST
+route: `/ingest`, `/poll`, `/jobs/surcharge`, `/review/send`, `/review/reject`. FastAPI
+inserts route-level `dependencies=[]` at the FRONT of the dependant list, so the limiter
+is evaluated before the signature/cron-secret/JWT gates — a flood is cheap-rejected before
+any crypto/DB work. This ordering does NOT contradict "limiter secondary to auth": that's
+about the fail-open priority (Redis-down ⇒ auth still gates), which holds. `get_rate_limiter`
+is an `@lru_cache` singleton (the counter must persist across requests); overridden in tests.
+
+**Global LLM-call guard = transient backpressure.** `GuardedLLMClient`
+(`freight.security.llm_guard`) decorates ANY `LLMClient` and is wired in
+`build_llm_client`, so EVERY call site is guarded with no call-site change (honors the
+build-against-interfaces invariant). Global budget key `llm:calls`, `llm_calls_per_minute`
+(default 60). Over budget → raise `LLMRateLimitError`, which propagates out of the consumer
+exactly like `HFTransientError` (uncaught by the /ingest route's `except IngestError` → 5xx
+→ QStash retries → DLQ on exhaustion). Retrying is correct — the budget refills — UNLIKE a
+content failure, which routes to `needs_review`. FAIL-OPEN on Redis-down (delegate to the
+model). **Tradeoff:** under a sustained flood, legit messages burn QStash retries and may
+DLQ (replayable at Phase 7); accepted backpressure for a low-volume showcase.
+
+**Disable switch.** `rate_limit_enabled` (default True) gates both: false ⇒ `build_llm_client`
+returns the bare backend and `RateLimit` is a no-op. The factory backend-SELECTION tests set
+it false to isolate which impl is chosen from the guard wrapper; a separate test asserts the
+guard wraps when enabled.
+
+**Test (hermetic, no real Redis).** `tests/test_rate_limit.py` (dict-backed FakeRedis):
+`allow` permits up to N then blocks, arms expiry once, fails open when Redis raises, `limit<=0`
+disables; the HTTP dep 429s over the limit (shared limiter instance so the counter persists),
+fails open on outage, and no-ops when disabled. `tests/test_llm_guard.py`: delegates under
+budget, raises `LLMRateLimitError` over budget WITHOUT calling the inner model, fails open on
+outage. Existing route tests are unaffected — Redis-absent ⇒ the limiter fails open.
+
+**Phase 8 carry-forwards (NOT done now):**
+- Behind the deploy proxy (Fly/Railway) `request.client.host` is the PROXY ip — wire a trusted
+  `X-Forwarded-For` / platform client-IP header so per-client limiting is real, not per-proxy.
+- Set the real Upstash `REDIS_URL` (the limiter is inert/fail-open until a reachable Redis).
+- Tune `public_rate_limit_per_minute` / `llm_calls_per_minute` against measured Phase 9 volume.
+
 ## 2026-06-13 — Phase 6.3: CORS locked to an explicit origin allowlist
 **The lockdown.** A Starlette `CORSMiddleware` is attached in `create_app()` via one
 seam, `configure_cors(app, settings)` (`freight.security.cors`) — never inline in the

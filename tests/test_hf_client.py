@@ -74,4 +74,6 @@ async def test_permanent_4xx_propagates() -> None:
 
 
 def test_build_llm_client_constructs_hf() -> None:
-    assert isinstance(build_llm_client(Settings(llm_backend="hf")), HFLLMClient)
+    # rate_limit disabled isolates backend selection from the guard wrapper (6.4).
+    client = build_llm_client(Settings(llm_backend="hf", rate_limit_enabled=False))
+    assert isinstance(client, HFLLMClient)

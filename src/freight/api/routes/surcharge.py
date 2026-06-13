@@ -14,6 +14,7 @@ from freight.config import get_settings
 from freight.db.repository import IngestRepository, make_engine
 from freight.rates import CachedRateLookup
 from freight.security.cron_auth import require_cron_secret
+from freight.security.http_rate_limit import RateLimit
 from freight.surcharge import run_surcharge_update
 
 router = APIRouter()
@@ -37,6 +38,9 @@ def get_surcharge_runner() -> Callable[[], int]:
 RunnerDep = Annotated[Callable[[], int], Depends(get_surcharge_runner)]
 
 
-@router.post("/jobs/surcharge", dependencies=[Depends(require_cron_secret)])
+@router.post(
+    "/jobs/surcharge",
+    dependencies=[Depends(RateLimit("surcharge")), Depends(require_cron_secret)],
+)
 def surcharge(run: RunnerDep) -> dict[str, int]:
     return {"versions_written": run()}

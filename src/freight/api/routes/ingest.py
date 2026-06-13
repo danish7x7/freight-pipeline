@@ -29,6 +29,7 @@ from freight.db.repository import IngestRepository, make_engine
 from freight.factories import build_llm_client
 from freight.ingestion.consumer import IngestConsumer, IngestError
 from freight.interfaces.types import QueueMessage
+from freight.security.http_rate_limit import RateLimit
 from freight.security.qstash_verifier import (
     QStashVerifier,
     SignatureError,
@@ -94,7 +95,7 @@ def parse_verified_message(
 MessageDep = Annotated[QueueMessage, Depends(parse_verified_message)]
 
 
-@router.post("/ingest")
+@router.post("/ingest", dependencies=[Depends(RateLimit("ingest"))])
 def ingest(message: MessageDep, consumer: ConsumerDep) -> dict[str, str]:
     try:
         asyncio.run(consumer.handle(message))
