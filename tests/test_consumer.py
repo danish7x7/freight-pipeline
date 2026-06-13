@@ -1,5 +1,6 @@
 """Consumer (transport) + /ingest route, end to end vs the local DB."""
 
+import json
 import os
 import uuid
 from collections.abc import Iterator
@@ -8,17 +9,20 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from qstash import Receiver
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 
 from freight.api.main import app
-from freight.api.routes.ingest import get_consumer
+from freight.api.routes.ingest import get_consumer, get_qstash_verifier
 from freight.db import IngestRepository, make_engine
 from freight.ingestion.consumer import IngestConsumer, IngestError
 from freight.interfaces.types import InboundMessage, LLMResult, QueueMessage
 from freight.llm import HFTransientError
 from freight.mocks.dispatcher import LocalDispatcher
+from freight.security.qstash_verifier import SDKQStashVerifier
+from tests.test_qstash_verifier import CURRENT, NEXT, URL, mint_token
 
 pytestmark = pytest.mark.integration
 
@@ -156,12 +160,27 @@ async def test_poison_message_dead_letters_after_retries(
 def test_ingest_route_2xx_then_5xx(repo: IngestRepository) -> None:
     gid = f"{PREFIX}{uuid.uuid4()}"
     _queued(repo, gid)
+    # The route now requires a valid QStash signature (6.1): use the real SDK-backed
+    # verifier with test keys and sign each raw body, so this exercises the gate too.
     app.dependency_overrides[get_consumer] = lambda: IngestConsumer(repo, _StubLLM())
+    app.dependency_overrides[get_qstash_verifier] = lambda: SDKQStashVerifier(
+        Receiver(current_signing_key=CURRENT, next_signing_key=NEXT), expected_url=URL
+    )
+
+    def _signed_post(client: TestClient, msg_id: str) -> int:
+        body = json.dumps({"id": msg_id, "payload": {}}).encode()
+        token = mint_token(CURRENT, body=body, url=URL)
+        return int(
+            client.post(
+                "/ingest", content=body, headers={"Upstash-Signature": token}
+            ).status_code
+        )
+
     try:
         client = TestClient(app)
-        ok = client.post("/ingest", json={"id": gid, "payload": {}})
-        missing = client.post("/ingest", json={"id": "missing", "payload": {}})
+        ok = _signed_post(client, gid)
+        missing = _signed_post(client, "missing")
     finally:
         app.dependency_overrides.clear()
-    assert ok.status_code == 200
-    assert missing.status_code == 500
+    assert ok == 200
+    assert missing == 500

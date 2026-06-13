@@ -1,6 +1,56 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-12 — Phase 6.1: /ingest verifies the QStash Upstash-Signature
+**The auth boundary is not hand-rolled.** Verification delegates to the official
+`qstash` SDK (`qstash==3.4.0`, `Receiver`, PyJWT HS256 under the hood) — no bespoke
+JWT/HMAC. PyPI name confirmed from the installed source as `qstash` (the older
+`upstash-qstash` is superseded); `Receiver(current_signing_key, next_signing_key)`,
+`receiver.verify(*, signature, body: str, url=None, clock_tolerance=0)` raising
+`qstash.errors.SignatureError`. The Receiver itself tries current→next key (rotation).
+
+**The seam.** `freight.security.qstash_verifier`: a `QStashVerifier` Protocol stated in
+**raw bytes** (`verify(*, body: bytes, signature: str) -> None`, raise = reject) +
+`SDKQStashVerifier` (decodes utf-8 only at the SDK boundary, since the body-hash claim
+is over the exact raw bytes — any re-serialization breaks the hash) + `build_qstash_
+verifier(settings)`. Phase 8 swaps real keys/URL behind the factory without touching
+the route. Injected via `Depends(get_qstash_verifier)`.
+
+**Ordering (the invariant that matters).** Route dependency chain
+`require_qstash_signature` (read `Upstash-Signature` header + `await request.body()`,
+verify) → `parse_verified_message` (`model_validate_json` ONLY after verify) → handler.
+Because the message arrives via `Depends`, FastAPI does no auto body-parse — so the
+signature check over raw bytes strictly precedes the JSON parse, the `gmail_message_id`
+idempotency claim, and all Redis/DB/enqueue work (which live inside `consumer.handle`).
+
+**Fail-closed, and don't hide bugs.** Missing header → 401; `SignatureError`
+(bad/expired/wrong-key/sub-mismatch) → 401; ANY other verifier exception → still 401
+but logged with the exception type, so a misconfiguration can't masquerade as routine
+auth-failure noise (Phase 7 will structure these logs). The verifier can never fall
+through to the handler.
+
+**Keys + expected URL.** `QSTASH_CURRENT_SIGNING_KEY` / `QSTASH_NEXT_SIGNING_KEY` /
+`QSTASH_EXPECTED_URL` (the signed `sub` claim) — env-only, placeholders in
+`.env.example`, empty locally. Empty expected-URL ⇒ `sub` not matched (claim still
+required present); set to the public /ingest URL in real deploys.
+
+**Test proves it for real (hermetic, no DB).** `tests/test_ingest_signature.py` mints
+a genuine HS256 token locally (claims `iss=Upstash, sub, exp, nbf, body=urlsafe_b64(
+sha256(raw)).rstrip("=")`, matching the SDK source) and runs the REAL `SDKQStashVerifier`
+with test keys — nothing stubbed; the consumer is a no-op override so 200 means only
+"gate passed". Cases: valid→200; tampered body→401; missing header→401; wrong-key→401;
+expired→401; **sub-mismatch→401** (proves the expected-URL binding actually rejects).
+`tests/test_qstash_verifier.py` unit-tests the seam (incl. next-key rotation). The
+pre-existing `test_consumer.py` route test was updated to sign its bodies.
+
+**Phase 8 carry-forwards (NOT done now — this is a local slice):**
+- Confirm the SDK API against live QStash docs (pinned to source-read of 3.4.0 here).
+- Real `QSTASH_CURRENT/NEXT_SIGNING_KEY` from the QStash console (GitHub/host secrets).
+- `sub`/public-URL match: set `QSTASH_EXPECTED_URL` to the real deployed /ingest URL,
+  accounting for any deploy proxy that rewrites the host before the app sees it.
+- Confirm QStash's actually-delivered header name (`Upstash-Signature`) and claim set
+  match the SDK's expectations against a live delivery.
+
 ## 2026-06-12 — Phase 6 kickoff: four security forks resolved (option 1)
 **Decision:** Phase 6 (security hardening) starts with these forks locked, all
 right-sized for a low-volume synthetic showcase:

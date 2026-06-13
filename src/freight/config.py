@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     # The consumer endpoint QStash pushes to (the deployed /ingest URL). Placeholder
     # locally; real value wired at Phase 8.
     qstash_destination_url: str = ""
+    # Signature verification keys (QStash signs each delivery; the verifier tries
+    # current then next to survive a rotation). Real keys from the QStash console at
+    # Phase 8; empty locally. The expected URL is the signed `sub` claim — the public
+    # /ingest URL; configurable, never hard-coded. Empty => sub is not matched.
+    qstash_current_signing_key: str = ""
+    qstash_next_signing_key: str = ""
+    qstash_expected_url: str = ""
 
     # --- Hugging Face serverless inference (OpenAI-compatible chat-completions) ---
     hf_token: str = ""
