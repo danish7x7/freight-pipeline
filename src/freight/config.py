@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     app_env: AppEnv = AppEnv.local
     log_level: str = "INFO"
     app_secret: str = "dev-only-insecure-secret"
+    # Shared bearer secret for the cron-triggered endpoints (/poll, /jobs/surcharge).
+    # Env-only; one secret for both. Empty => the endpoints reject all callers
+    # (fail-closed), which is correct until the Phase 8 GitHub Secret is wired.
+    cron_secret: str = ""
 
     # --- Interface selection (swap impls by config, not by code) ---
     llm_backend: Literal["mock", "hf"] = "mock"

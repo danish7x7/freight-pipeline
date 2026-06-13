@@ -8,6 +8,9 @@ from fastapi.testclient import TestClient
 from freight.api.main import app
 from freight.api.routes.poll import get_poller
 from freight.ingestion.poller import PollResult
+from freight.security.cron_auth import get_cron_secret
+
+CRON_SECRET = "test-cron-secret"
 
 
 class _StubPoller:
@@ -24,8 +27,11 @@ def _stub_factory() -> _StubPoller:
 
 def test_poll_route_returns_counts() -> None:
     app.dependency_overrides[get_poller] = _stub_factory
+    app.dependency_overrides[get_cron_secret] = lambda: CRON_SECRET
     try:
-        response = TestClient(app).post("/poll")
+        response = TestClient(app).post(
+            "/poll", headers={"Authorization": f"Bearer {CRON_SECRET}"}
+        )
     finally:
         app.dependency_overrides.clear()
     assert response.status_code == 200

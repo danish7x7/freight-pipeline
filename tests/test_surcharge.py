@@ -13,7 +13,10 @@ from sqlalchemy.exc import OperationalError
 from freight.api.main import app
 from freight.api.routes.surcharge import get_surcharge_runner
 from freight.db import IngestRepository, RateKey, make_engine
+from freight.security.cron_auth import get_cron_secret
 from freight.surcharge import run_surcharge_update
+
+CRON_SECRET = "test-cron-secret"
 
 DEFAULT_DSN = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 
@@ -91,8 +94,11 @@ def test_surcharge_appends_new_version_not_overwrite(
 
 def test_surcharge_route_returns_count() -> None:
     app.dependency_overrides[get_surcharge_runner] = lambda: (lambda: 3)
+    app.dependency_overrides[get_cron_secret] = lambda: CRON_SECRET
     try:
-        response = TestClient(app).post("/jobs/surcharge")
+        response = TestClient(app).post(
+            "/jobs/surcharge", headers={"Authorization": f"Bearer {CRON_SECRET}"}
+        )
     finally:
         app.dependency_overrides.clear()
     assert response.status_code == 200

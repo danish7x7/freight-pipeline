@@ -1,6 +1,42 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-12 — Phase 6.2: CRON_SECRET bearer on /poll + /jobs/surcharge
+**The gate.** Both cron-triggered endpoints (which trigger ingestion / rate writes)
+now require `Authorization: Bearer <CRON_SECRET>`. Auth lives in one dependency,
+`require_cron_secret` (`freight.security.cron_auth`), applied via
+`@router.post(..., dependencies=[Depends(require_cron_secret)])` on each route — never
+inline in the handlers, never mixed with poll/surcharge logic. Reuses the 6.1 seam
+pattern.
+
+**Single secret, env-only.** `CRON_SECRET` guards both endpoints (replacing the old
+per-endpoint `POLL_TOKEN`/`SURCHARGE_TOKEN`). Added to Settings (default `""`) and
+`.env.example`. Header parsed properly: missing header / non-`bearer` scheme / empty
+token → 401. Compare is `hmac.compare_digest`, never `==`.
+
+**The fail-open trap, closed explicitly.** `hmac.compare_digest("", "")` is `True`, so
+an unset secret + an empty bearer would otherwise pass. The dependency rejects an empty
+configured secret (401) BEFORE running any compare, and `logger.warning`s that
+CRON_SECRET is unconfigured (consistent with 6.1 fail-closed logging). The compare is
+never run against an empty configured secret.
+
+**Workflows.** `poll-inbox.yml` and `fuel-surcharge.yml` now send
+`Authorization: Bearer ${{ secrets.CRON_SECRET }}` and the old `POLL_TOKEN`/
+`SURCHARGE_TOKEN` env refs are dropped. No secret value is in code or git.
+
+**Test (hermetic).** `tests/test_cron_auth.py` stubs the downstream poll/surcharge work
+(no DB/Gmail/Redis) and parametrizes BOTH endpoints: correct→200; wrong→401; missing
+header→401; malformed (wrong scheme / no token / empty token / no scheme)→401; and the
+unconfigured-secret guard (CRON_SECRET="" + empty/any bearer)→401, proving
+empty-equals-empty can't fail open. The pre-existing `/poll` and `/jobs/surcharge` route
+tests were updated to send the bearer.
+
+**Phase 8 carry-forward (NOT done now):** set the `CRON_SECRET` GitHub Secret AND the
+matching backend env value at wiring, and REMOVE the old `POLL_TOKEN`/`SURCHARGE_TOKEN`
+repo secrets. Until `CRON_SECRET` is set on both sides the cron workflows will 401 —
+that is the fail-closed posture working as intended; the crons do no real work pre-Phase
+8 anyway (they're inert until `POLL_ENDPOINT`/`SURCHARGE_ENDPOINT` are provided).
+
 ## 2026-06-12 — Phase 6.1: /ingest verifies the QStash Upstash-Signature
 **The auth boundary is not hand-rolled.** Verification delegates to the official
 `qstash` SDK (`qstash==3.4.0`, `Receiver`, PyJWT HS256 under the hood) — no bespoke

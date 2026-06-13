@@ -23,7 +23,7 @@ jobs:
       - name: Trigger a poll cycle
         env:
           POLL_ENDPOINT: ${{ secrets.POLL_ENDPOINT }}
-          POLL_TOKEN: ${{ secrets.POLL_TOKEN }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           # Inert until the Phase 8 deploy provides POLL_ENDPOINT. No live target yet,
           # so this skips cleanly rather than failing the workflow.
@@ -32,4 +32,4 @@ jobs:
             exit 0
           fi
           curl -fsS -X POST "$POLL_ENDPOINT" \
-            -H "Authorization: Bearer $POLL_TOKEN"
+            -H "Authorization: Bearer $CRON_SECRET"
