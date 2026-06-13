@@ -1,6 +1,44 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-13 — Phase 6.3: CORS locked to an explicit origin allowlist
+**The lockdown.** A Starlette `CORSMiddleware` is attached in `create_app()` via one
+seam, `configure_cors(app, settings)` (`freight.security.cors`) — never inline in the
+app body or handlers, same discipline as `cron_auth`/`qstash_verifier`. Origins come
+from `CORS_ALLOW_ORIGINS` (comma-separated, `cors_origins_list()` strips/drops empties),
+NEVER `["*"]`. Default `http://localhost:3000` (Next dev); empty => no origin allowed
+(fail-closed), consistent with 6.1/6.2. `allow_methods=["POST"]`,
+`allow_headers=["Authorization","Content-Type"]`.
+
+**`allow_credentials=False` — deliberate.** The console authenticates with an explicit
+`Authorization: Bearer <JWT>` header (`web/lib/api.ts` `authedPost`), not cookies, and
+never sends `credentials:'include'`. So credentialed CORS is never needed; false is the
+tighter setting and sidesteps the browser's wildcard+credentials rejection rule. The
+bearer header rides through fine via `allow_headers` (credentials govern cookies/TLS
+client certs, not request headers).
+
+**Scope.** Only `/review/send` + `/review/reject` are browser-facing. `/ingest` (QStash)
+and `/poll` / `/jobs/surcharge` (cron curls) are server-to-server with no browser
+`Origin`, so a global allowlist is harmless to them.
+
+**CSRF — assessed, intentionally NOT adding token machinery.** PLAN's "CSRF on
+state-changing routes" line is bundled under the PII/TLS bullet; the DECISIONS task
+breakdown scopes 6.3 to CORS. Classic CSRF needs ambient credentials a cross-site
+request auto-attaches (cookie/session). This API has none: auth is a bearer header that
+JS must set explicitly and that a cross-site form/img/navigation cannot forge, and there
+are no auth cookies. So there is no live CSRF exposure to defend; a CSRF token would be
+dead weight on a bearer model. If cookie-based sessions are ever introduced, revisit.
+
+**Test (hermetic).** `tests/test_cors.py` exercises `configure_cors` on a throwaway app
+with explicit settings (independent of the env/settings singleton): allowed origin →
+preflight + actual response echo ACAO; unlisted origin → no ACAO grant; empty allowlist
+→ fail-closed (no ACAO); `allow-credentials` never advertised.
+
+**Phase 8 carry-forward (NOT done now):** set `CORS_ALLOW_ORIGINS` to the deployed
+console origin (the Vercel URL) in the backend env — the factory swaps it with no code
+change. Until set, only `localhost:3000` is allowed (dev default), which is the correct
+fail-closed-ish posture for a not-yet-deployed console.
+
 ## 2026-06-12 — Phase 6.2: CRON_SECRET bearer on /poll + /jobs/surcharge
 **The gate.** Both cron-triggered endpoints (which trigger ingestion / rate writes)
 now require `Authorization: Bearer <CRON_SECRET>`. Auth lives in one dependency,

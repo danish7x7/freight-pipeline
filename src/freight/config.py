@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # Env-only; one secret for both. Empty => the endpoints reject all callers
     # (fail-closed), which is correct until the Phase 8 GitHub Secret is wired.
     cron_secret: str = ""
+    # Browser origins allowed to call the API (the Next.js review console). Comma-
+    # separated; env-driven so Phase 8 wires the Vercel origin without a code change.
+    # Empty => no origins allowed (fail-closed; browser CORS blocked). Only the
+    # /review/* routes are browser-facing — the cron/QStash routes are server-to-server.
+    cors_allow_origins: str = "http://localhost:3000"
 
     # --- Interface selection (swap impls by config, not by code) ---
     llm_backend: Literal["mock", "hf"] = "mock"
@@ -81,6 +86,14 @@ class Settings(BaseSettings):
     gmail_redirect_uri: str = Field(
         default="http://localhost:8000/auth/gmail/callback"
     )
+
+    def cors_origins_list(self) -> list[str]:
+        """The allowed browser origins as a clean list (comma-separated env value).
+
+        Empty / whitespace-only entries are dropped, so an unset value yields ``[]``
+        (no origin allowed — fail-closed), not a list containing the empty string.
+        """
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
 
 
 @lru_cache(maxsize=1)
