@@ -36,6 +36,7 @@ from dataclasses import dataclass
 
 from freight.interfaces.queue import Handler
 from freight.interfaces.types import QueueMessage
+from freight.observability.metrics import DLQ_SIZE
 
 logger = logging.getLogger("freight.dispatcher")
 
@@ -80,7 +81,7 @@ class LocalDispatcher:
 
     def _backoff(self, attempt_index: int) -> float:
         """Bounded capped-exponential delay before retry ``attempt_index`` (0-based)."""
-        return min(self._max_delay, self._base_delay * (2**attempt_index))
+        return min(self._max_delay, self._base_delay * float(2**attempt_index))
 
     async def deliver(self, message: QueueMessage) -> bool:
         """Attempt delivery up to ``retries + 1`` times; dead-letter on exhaustion.
@@ -101,6 +102,7 @@ class LocalDispatcher:
             return True
         logger.error("message %s exhausted retries; dead-lettering", message.id)
         self.dead_letter.append(message)
+        DLQ_SIZE.set(len(self.dead_letter))  # push the real local DLQ depth
         return False
 
     async def replay(self) -> ReplayResult:
@@ -116,6 +118,7 @@ class LocalDispatcher:
         for message in pending:
             if await self.deliver(message):  # re-dead-letters itself on repeat failure
                 replayed += 1
+        DLQ_SIZE.set(len(self.dead_letter))  # reflect the drained/re-lettered depth
         result = ReplayResult(
             replayed=replayed, re_dead_lettered=len(self.dead_letter)
         )

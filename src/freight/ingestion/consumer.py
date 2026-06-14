@@ -20,6 +20,7 @@ from freight.extraction import ExtractionOutcome, extract
 from freight.interfaces import LLMClient
 from freight.interfaces.types import QueueMessage
 from freight.observability import bind_correlation_id
+from freight.observability.metrics import INGEST_DURATION, INGEST_PROCESSED
 from freight.pdf import StorageReader, UnconfiguredStorageReader, extract_text
 from freight.rates.lookup import RateLookup
 
@@ -65,7 +66,7 @@ class IngestConsumer:
         whole delivery, so every downstream log line — extract, rate lookup, finalize —
         carries the id that traces this one email.
         """
-        with bind_correlation_id(message.id):
+        with bind_correlation_id(message.id), INGEST_DURATION.time():
             record = self._repo.get_by_gmail_id(message.id)
             if record is None:
                 raise IngestError(f"no committed row for id {message.id!r}")
@@ -89,6 +90,9 @@ class IngestConsumer:
                     outcome=outcome,
                     contracted_rate=contracted,
                 )
+            INGEST_PROCESSED.labels(
+                status=outcome.status, intent=outcome.intent or "none"
+            ).inc()
             logger.info(
                 "ingest processed",
                 extra={"status": outcome.status, "intent": outcome.intent},

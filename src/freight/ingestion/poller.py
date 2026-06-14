@@ -33,6 +33,7 @@ from freight.ingestion.idempotency import ClaimGate
 from freight.interfaces import GmailClient, Queue
 from freight.interfaces.types import QueueMessage
 from freight.observability import bind_correlation_id
+from freight.observability.metrics import MESSAGES_PUBLISHED
 
 logger = logging.getLogger("freight.poller")
 
@@ -100,6 +101,7 @@ class Poller:
         with bind_correlation_id(gmail_message_id):
             await self._queue.publish(QueueMessage(id=gmail_message_id, payload={}))
             self._repo.set_ingest_status(gmail_message_id, "queued")
+            MESSAGES_PUBLISHED.inc()
             logger.info("published to queue")
 
 

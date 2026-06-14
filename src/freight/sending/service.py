@@ -22,6 +22,7 @@ from freight.deals import DealState, TransitionError, advance
 from freight.interfaces import GmailClient
 from freight.interfaces.types import OutboundMessage
 from freight.observability import bind_correlation_id
+from freight.observability.metrics import REVIEW_DISPOSITIONS
 
 logger = logging.getLogger("freight.sending")
 
@@ -65,6 +66,9 @@ def reject_deal(
             entity_type="deals",
             entity_id=deal_id,
         )
+    # Acceptance rate: the human disposition (rejected). reject is not corr-id-bound
+    # (7.1 seam note); the metric is still emitted here for the gate outcome.
+    REVIEW_DISPOSITIONS.labels(disposition="rejected").inc()
 
 
 def send_quote(
@@ -147,5 +151,6 @@ def send_quote(
                 entity_id=deal.id,
                 detail={"quote_id": quote_id, "gmail_message_id": gmail_message_id},
             )
+        REVIEW_DISPOSITIONS.labels(disposition="sent").inc()  # acceptance rate
         logger.info("quote sent", extra={"quote_id": quote_id})
         return SendResult(send_id=claim.id, gmail_message_id=gmail_message_id)

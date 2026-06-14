@@ -431,6 +431,20 @@ class IngestRepository:
         with self._engine.connect() as conn:
             return [r[0] for r in conn.execute(stmt)]
 
+    def count_ingest_backlog(self) -> int:
+        """Inbound emails not yet terminal (received/queued) — the backlog gauge."""
+        stmt = select(func.count()).where(
+            email_messages.c.ingest_status.in_(("received", "queued"))
+        )
+        with self._engine.connect() as conn:
+            return int(conn.execute(stmt).scalar_one())
+
+    def count_sends_claimed(self) -> int:
+        """Sends claimed but not yet sent (the at-least-once stuck window) — gauge."""
+        stmt = select(func.count()).where(sends.c.status == "claimed")
+        with self._engine.connect() as conn:
+            return int(conn.execute(stmt).scalar_one())
+
     def begin(self) -> AbstractContextManager[Connection]:
         """Open a transaction; the caller owns commit/rollback (the finalize tx)."""
         return self._engine.begin()

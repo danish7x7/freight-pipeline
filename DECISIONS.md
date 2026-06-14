@@ -12,6 +12,41 @@ deploy. **The done-when splits too:** "trace one email end to end" is the LOCAL 
 (correlation-id logs); "the dashboard is live" is the DEPLOY gate (Phase 8). Ordering
 front-loads the local tasks 7.1 → 7.4.
 
+## 2026-06-14 — Phase 7.3: Prometheus metrics + /metrics (Grafana stays Phase 8)
+**Local gate only.** `/metrics` scrapes (Prometheus text format) and the counters MOVE when
+the pipeline runs. The Grafana Cloud dashboard + any hosted scraping config are Phase 8 —
+deliberately not here. `prometheus-client` added; metrics are module-level singletons on the
+default registry (single low-volume process; no multiprocess/pushgateway — over-engineering).
+
+**Emitted at the SAME seams 7.1 binds the correlation id, so logs and metrics line up:**
+- `freight_ingest_processed_total{status,intent}` (counter) + `freight_ingest_duration_
+  seconds` (histogram = latency) → `consumer.handle`.
+- `freight_messages_published_total` (counter) → `poller._publish` (runs in-process via
+  `/poll`).
+- `freight_review_dispositions_total{disposition}` (counter) → `send_quote` ("sent") /
+  `reject_deal` ("rejected").
+
+**Acceptance rate = the HUMAN disposition, not extraction confidence.** Incremented on the
+reviewer outcome at the gate — `sent` at /review/send, `rejected` at /review/reject; the
+dashboard computes `sent/(sent+rejected)`. (`reject_deal` is still not corr-id-bound — the
+7.1 seam — so its log/metric only half-line-up; the disposition metric is emitted regardless.
+Binding `deal_id` there stays a 7.1 follow-up.)
+
+**Gauges keyed to REAL state, never a fake depth.** The queue is push-based, so there is no
+depth to poll. `freight_ingest_backlog` (emails in received/queued) and
+`freight_sends_claimed_not_sent` (sends stuck 'claimed' — the real at-least-once window) are
+refreshed from actual DB rows at SCRAPE time (`refresh_gauges_from_db` in the /metrics
+handler; two `func.count()` repo methods). The refresh is RESILIENT: a DB error leaves the
+gauges at their last value and /metrics still serves the counters (proven by a no-DB test).
+`freight_dlq_size` is PUSHED by `LocalDispatcher` on dead-letter/replay (the real local DLQ
+depth); the real QStash DLQ count is a Phase 8 wire.
+
+**Tested (hermetic):** `test_metrics.py` — /metrics serves Prometheus text with all names;
+disposition + ingest counters move (delta via `REGISTRY.get_sample_value`, robust against
+global singletons); the DB gauges reflect injected counts; the DLQ gauge moves on dead-letter
+and holds on re-dead-letter; /metrics still serves with no DB. Full suite 243 passed; real
+/metrics smoke-checked (200, gauges present).
+
 ## 2026-06-14 — Phase 7.2: readiness + bounded backoff + DLQ replay
 **Readiness `/ready` is distinct from `/health` liveness.** `/health` stays liveness
 (process up + serving, no dependency checks — restart-if-dead). New `/ready` answers "can

@@ -17,6 +17,7 @@ dependencies = [
     "pypdf>=6.13.2",
     "pyjwt[crypto]>=2.13.0",
     "qstash>=3.4.0",
+    "prometheus-client>=0.25.0",
 ]
 
 [dependency-groups]
