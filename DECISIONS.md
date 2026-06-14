@@ -1,6 +1,51 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-13 — Phase 6.5: adversarial containment run (both vectors)
+**The run.** `tests/test_containment.py` sweeps the WHOLE adversarial corpus through the
+real `extract()` gate with a fully **fooled model** (`_FooledLLM` returns the attacker's
+structured payload at confidence 1.0 — the worst case: the model is completely
+compromised by the injection). It proves the DETERMINISTIC validation gate contains every
+injection regardless of model behaviour. Hermetic and **never skips** (a containment proof
+must always execute in CI) — it drives `extract()` directly rather than the DB-end-to-end
+consumer; the consumer's PDF routing + DB `needs_review` write stays covered by
+`test_pdf_intake.py::test_pdf_embedded_injection_is_rejected`.
+
+**Both vectors, as required.** Email-body (samples 9-12) AND attachment-borne PDF
+(samples 13-14). For the PDF samples the run renders a REAL text PDF from the corpus's new
+`attachment_text`, asserts `extract_text` surfaces the injection marker (proving the
+attack actually reaches the model boundary through the text layer), then drives the fooled
+payload through the SAME `extract()` path CLAUDE.md mandates. This closes the stale Phase 1
+carry-forward (the PDF *samples* existed since the corpus extension, but nothing exercised
+them; the note at the top of `synthetic/emails.py` is refreshed).
+
+**Per-dimension assertions (not uniform).** Each adversarial sample carries an
+`attack_payload` whose ONLY gate-violating field targets a distinct dimension, plus an
+`expected_failure` reason-prefix the run asserts appears in `review_reason`. So weakening
+one gate dimension fails LOUDLY instead of being masked by another sample's rejection.
+Coverage: `invalid_intent` (body 9 + PDF 14 — intent gate on both vectors),
+`invalid_dest_city` (10, newline), `invalid_origin_state` (11), `invalid_equipment`
+(12, spoofed tool-call), `weight_out_of_range` (13). Confidence 1.0 never bypasses.
+
+**No-auto-send invariant.** A structural test asserts `extract()`'s signature is exactly
+`(llm, subject, body)` — no Gmail/sender/queue channel — and the module exposes no `send`,
+so the model can never trigger an action. A second test feeds a CLEAN valid payload at
+confidence 1.0 and asserts the result is still just an `ExtractionOutcome` (`processed`
+data), never a send. The only outbound path remains the human-gated `/review/send`
+(proven by `test_send.py`). This is Phase 6's done-when: injection can't drive a bad send.
+
+**Corpus carries the attack ground truth.** `SyntheticEmail` gained `attack_payload`,
+`expected_failure`, `attachment_text` (adversarial-only, optional → back-compatible;
+`test_synthetic.py` unchanged). A completeness guard asserts every adversarial sample is
+runnable and both vectors stay represented, so a future corpus edit can't silently drop a
+sample or a vector. These labels also feed the Phase 9 real-model run (fork: 6.5 + corpus
+run merge).
+
+**Scope (unchanged forks).** Deterministic fooled-model mock, not a real model — this
+proves the GATE, not model accuracy (real-model accuracy is Phase 9). The fooled mock
+lives in the test, not shipped `src` (keeps attack-simulation out of the package); the
+reusable artifact is the labeled corpus.
+
 ## 2026-06-13 — Phase 6.4: rate limiter (public API) + global LLM-call guard
 **One fail-open primitive.** `RateLimiter` (`freight.security.rate_limit`) is a fixed-
 window counter over Redis (`INCR`; arm `EXPIRE` on the first hit of a window). It is
