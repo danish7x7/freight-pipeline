@@ -134,14 +134,28 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
       + full git history clean. Full suite 217 passed. **Phase 6 closed.**
 
 ## Phase 7 — Observability + reliability
+Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DECISIONS
+2026-06-14 "Phase 7 triage". The local half is complete; the deploy half moves to Phase 8.
 - [ ] Sentry on frontend + backend.
-- [ ] Structured JSON logs with a correlation ID threaded ingest → send.
-- [ ] Prometheus metrics → Grafana Cloud dashboard (queue depth, latency,
+      (DEPLOY-time → Phase 8: needs a Sentry DSN/project. Init seam is trivial; value is
+      hosted capture.)
+- [x] Structured JSON logs with a correlation ID threaded ingest → send.
+      (7.1: dependency-free JsonFormatter + contextvar; corr id = gmail_message_id bound at
+      consumer.handle / poller._publish / send_quote — real ingest→send thread.)
+- [~] Prometheus metrics → Grafana Cloud dashboard (queue depth, latency,
       acceptance rate, DLQ size).
-- [ ] Health-check endpoints; retries with backoff; confirm DLQ replay works.
+      (7.3: metrics instrumented + `/metrics` scrapes LOCALLY — acceptance = human
+      disposition; gauges keyed to real DB rows / pushed DLQ. **Grafana dashboard = Phase 8.**)
+- [x] Health-check endpoints; retries with backoff; confirm DLQ replay works.
+      (7.2: `/ready` (DB hard / Redis degraded) distinct from `/health`; bounded backoff;
+      DLQ replay rides the flip_if_queued claim — no double-process.)
 - [ ] Supabase backups on; uptime monitor (Better Stack / UptimeRobot).
-- [ ] Write `RECOVERY.md` (DLQ replay, restore, key rotation).
+      (DEPLOY-time → Phase 8: provider toggle + external monitor on the live URL.)
+- [x] Write `RECOVERY.md` (DLQ replay, restore, key rotation).
+      (7.4: runbook traced to the 7.1–7.3 mechanisms; [local] vs [deploy — Phase 8] tagged.)
 - **Done when:** the dashboard is live and you can trace one email end to end.
+      ✅ LOCAL gate met 2026-06-14: trace one email end to end via the correlation-id JSON
+      logs (7.1) — smoke-verified. ⏳ DEPLOY gate (dashboard live) = Phase 8. Full suite 243.
 
 ## Phase 8 — Deployment
 - [ ] Deploy backend container (Fly.io/Railway), always-on; register QStash target.

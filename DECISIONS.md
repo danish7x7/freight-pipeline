@@ -12,6 +12,33 @@ deploy. **The done-when splits too:** "trace one email end to end" is the LOCAL 
 (correlation-id logs); "the dashboard is live" is the DEPLOY gate (Phase 8). Ordering
 front-loads the local tasks 7.1 → 7.4.
 
+## 2026-06-14 — Phase 7.4: RECOVERY.md + local half of Phase 7 closed
+**Runbook, traced not invented.** `RECOVERY.md` is an operational runbook built on the
+mechanisms from 7.1–7.3 and earlier, every procedure tagged **[local]** (works today /
+test-proven) or **[deploy — Phase 8]** (needs live providers): detection via `/ready` +
+`/metrics` + correlation-id logs; DLQ replay riding the `flip_if_queued` claim (no
+double-process); the stuck `claimed`-not-sent send (at-least-once window + the
+`X-Freight-Quote-Id` marker, honestly flagged as not-yet-deduped, cross-ref THREAT_MODEL
+R4); restore from Supabase backups (gated on backups being ON); key/secret rotation per
+secret (QStash current→next zero-downtime, CRON_SECRET both-sides fail-closed, Gmail/
+Supabase/HF). Faithfulness spot-checked against the real symbol names before commit.
+
+**Local half of Phase 7 complete; deploy half → Phase 8.** Per the 7-triage split: 7.1
+logs, 7.2 readiness/backoff/replay, 7.3 metrics+/metrics, 7.4 RECOVERY.md are done and
+testable locally. Sentry, the Grafana dashboard, Supabase backups, and the uptime monitor
+are deploy-time (Phase 8). PLAN ticks reflect this honestly: `[x]` for 7.1/7.2/7.4, `[~]`
+for metrics (instrumented local, dashboard Phase 8), `[ ]` for the two deploy-only lines.
+The done-when splits: the LOCAL gate (trace one email end to end via correlation-id logs)
+is met and smoke-verified; the DEPLOY gate (dashboard live) is Phase 8.
+
+**Process miss caught + fixed.** The 7.3 commit (f159ab2) actually carried two latent
+`tests/test_metrics.py` faults — an E501 and a mypy implicit-reexport — that my pre-commit
+check masked because `ruff … >/dev/null && mypy … >/dev/null` swallowed the output and I
+misread the resulting exit-1 as a truncation artifact. Fixed here (reflow + import
+`REVIEW_DISPOSITIONS` from `freight.observability.metrics`, its source). Lesson: don't
+`>/dev/null` the lint/type gate and infer success from a later step; read the exit per
+command. Full suite 243 passed, ruff + mypy clean.
+
 ## 2026-06-14 — Phase 7.3: Prometheus metrics + /metrics (Grafana stays Phase 8)
 **Local gate only.** `/metrics` scrapes (Prometheus text format) and the counters MOVE when
 the pipeline runs. The Grafana Cloud dashboard + any hosted scraping config are Phase 8 —

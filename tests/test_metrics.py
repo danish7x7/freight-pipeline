@@ -1,7 +1,7 @@
 """Phase 7.3: the local gate — /metrics scrapes + counters move when the pipeline runs.
 
-Hermetic. Counter assertions use deltas via ``REGISTRY.get_sample_value`` (the metrics are
-process-global singletons, so absolute values aren't stable across the suite).
+Hermetic. Counter assertions use deltas via ``REGISTRY.get_sample_value`` (the metrics
+are process-global singletons, so absolute values aren't stable across the suite).
 """
 
 from collections.abc import Iterator
@@ -14,7 +14,7 @@ from freight.api.main import app, refresh_gauges_from_db
 from freight.interfaces.types import QueueMessage
 from freight.mocks.dispatcher import LocalDispatcher
 from freight.observability import metrics
-from freight.sending.service import REVIEW_DISPOSITIONS
+from freight.observability.metrics import REVIEW_DISPOSITIONS
 
 
 def _value(name: str, labels: dict[str, str] | None = None) -> float:
