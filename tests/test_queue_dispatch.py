@@ -10,6 +10,10 @@ from freight.mocks.dispatcher import LocalDispatcher
 from freight.queue import QStashQueue
 
 
+async def _no_sleep(_seconds: float) -> None:
+    """Skip real backoff delay in tests."""
+
+
 async def test_dispatcher_delivers_once_on_success() -> None:
     seen: list[QueueMessage] = []
 
@@ -30,7 +34,7 @@ async def test_dispatcher_dead_letters_after_retries_plus_one() -> None:
     async def handler(message: QueueMessage) -> None:
         raise RuntimeError("poison")
 
-    dispatcher = LocalDispatcher(handler, retries=3)
+    dispatcher = LocalDispatcher(handler, retries=3, sleep=_no_sleep)
     message = QueueMessage(id="poison-1")
     await dispatcher.deliver(message)
 
@@ -48,7 +52,7 @@ async def test_dispatcher_recovers_on_a_later_attempt() -> None:
         if calls["n"] < 2:
             raise RuntimeError("transient")
 
-    dispatcher = LocalDispatcher(flaky, retries=3)
+    dispatcher = LocalDispatcher(flaky, retries=3, sleep=_no_sleep)
     message = QueueMessage(id="m1")
     await dispatcher.deliver(message)
 

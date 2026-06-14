@@ -12,6 +12,44 @@ deploy. **The done-when splits too:** "trace one email end to end" is the LOCAL 
 (correlation-id logs); "the dashboard is live" is the DEPLOY gate (Phase 8). Ordering
 front-loads the local tasks 7.1 → 7.4.
 
+## 2026-06-14 — Phase 7.2: readiness + bounded backoff + DLQ replay
+**Readiness `/ready` is distinct from `/health` liveness.** `/health` stays liveness
+(process up + serving, no dependency checks — restart-if-dead). New `/ready` answers "can
+the process do work" via `freight.observability.readiness.check_readiness(engine, url)`
+(thin route → service; module-level `get_readiness_report` dependency, overridable in
+tests). **Hard vs soft, the degraded distinction:** Postgres is the HARD dep (no DB ⇒ the
+consumer can't claim/finalize and `/review` can't serve) ⇒ `not_ready` / **HTTP 503** (pull
+from rotation). Redis is FAIL-OPEN (idempotency pre-check, cache, rate limiter all degrade)
+⇒ `degraded` / **HTTP 200** — *degraded ≠ process-down*, the instance keeps serving. Body
+`{"status", "checks": {"database", "redis"}}`. HF/Gmail/QStash are deliberately NOT
+readiness gates (per-request, own transient/retry/DLQ handling — a blip must not deopt the
+whole instance). Probes are bounded (`SELECT 1`; Redis `PING` under the existing 1s
+timeouts) so the probe can't hang. Smoke-verified: DB-down locally → 503 not_ready with
+redis ok.
+
+**DLQ replay rides the SAME process-once claim — never a bypass.** `LocalDispatcher.replay`
+re-delivers each dead-lettered message through the SAME `Handler`. In cloud that handler is
+`/ingest → consumer.handle → finalize → flip_if_queued` (the conditional
+`UPDATE … WHERE ingest_status='queued'`), so replay is CONTROLLED re-delivery: a still-
+'queued' (transiently-failed) message processes once; an already-'processed' message flips
+0 rows and **no-ops**. Replay cannot reintroduce double-process. A message that fails again
+is re-dead-lettered (bounded; no infinite loop). The no-double-process property is proven
+hermetically with a claim-aware fake handler (mirrors `flip_if_queued`); the real path uses
+the repo's `flip_if_queued`. **Cloud parity (for 7.4 RECOVERY.md):** QStash DLQ replay
+re-POSTs to `/ingest`, inheriting the same claim — no separate idempotency needed.
+
+**Bounded backoff, attempt-count + dead-letter semantics unchanged.** Between retries the
+dispatcher now sleeps `min(max_delay, base_delay·2^i)` (capped exponential, bounded by
+`max_delay` + finite attempts). The `retries+1`-then-dead-letter convention (QStash
+`Upstash-Retries` parity) is UNCHANGED — backoff adds delay only. `sleep` is injectable so
+tests record the schedule (e.g. base=1,cap=4 → `[1,2,4,4,4]`) with zero real waiting; the
+two existing retry-path dispatch tests now inject a no-op sleeper.
+
+**Tested (hermetic):** `test_readiness.py` (status/HTTP mapping + the route incl. liveness-
+stays-up-when-readiness-503), `test_dlq_replay.py` (capped-bounded backoff schedule; replay
+recovers a transient failure; **replay of an already-processed id is a claim no-op, not a
+double-process**; persistent poison re-dead-letters). Full suite 237 passed.
+
 ## 2026-06-14 — Phase 7.1: structured JSON logs + correlation id (ingest -> send)
 **Dependency-free.** A small `logging.Formatter` (`JsonFormatter`) emits one JSON object
 per record; a `contextvars.ContextVar` (`correlation_id`) + a `logging.Filter` stamp the
