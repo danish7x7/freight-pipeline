@@ -1,6 +1,38 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-14 — Phase 6.8: close-out (verify-and-record; Phase 6 closed)
+**Not a rebuild — verification.** No code changed. The two done-when gates were verified
+by scan/test, and the PLAN Phase 6 boxes ticked honestly.
+
+**"No secret in the repo" — scanned, not asserted.** No gitleaks/trufflehog installed, so:
+(1) structural — `.env` / `web/.env.local` are **untracked + gitignored** and were **never
+committed** (`git log --all -- .env` empty); only `*.example` files are tracked.
+(2) `.env.example` + `web/.env.local.example` are **placeholders-only** (`replace-me`,
+`your-project`, localhost). (3) full-history patch scan (`git log -p --all`) for high-signal
+formats (PEM, JWT `eyJ…`, `service_role` JWTs, `AKIA`, `ghp_`, `sig_`, `sk-`, `AIza`) →
+**zero real secrets**; every `service_role` hit is the Postgres ROLE NAME in docs/SQL/code,
+not a key. (4) tracked-source scan for non-placeholder KEY/TOKEN/SECRET/PASSWORD assignments
+→ none. **Called out as intentional, not leaks:** `postgres:postgres@localhost` (local-dev
+DSN default) and the seed `freight-demo-pw` (demo password, explicitly "never production").
+
+**"Injection can't drive a bad send" — cited, not re-proven.** `tests/test_containment.py`
+green (9 passed): the 6.5 fooled-model sweep over both vectors (email + PDF) with
+per-dimension assertions, plus the no-auto-send structural test (extract() has no send
+channel). This is the evidence for Phase 6's done-when. Supporting gates re-confirmed green
+(sig/cron/cors/limiter/llm-guard = 49 passed; full suite 217). Gmail scopes confirmed
+`gmail.readonly` + `gmail.send`.
+
+**PLAN boxes — honest ticks.** Five `[x]` (secrets+audit 6.6, signatures+scopes 6.1/Phase 2,
+limiter 6.4, audit-append-only+containment 6.0/6.5, THREAT_MODEL 6.7). One **`[~]` partial,
+not a silent tick**: "Encrypt PII columns / TLS / CSRF" — PII column encryption was
+**de-scoped to at-rest baseline** (synthetic data; pgcrypto would break RLS/joins/audit; real-
+PII prod delta = THREAT_MODEL R3), TLS is in transit, CSRF is **N/A** on the bearer model
+(6.3). Ticking it `[x]` would misrepresent the log.
+
+**Phase 6 is closed.** Next is Phase 7 (observability + reliability). Open carry-forwards
+into Phase 8 wiring are tracked as THREAT_MODEL R2/R5/R7 + the existing per-task DECISIONS.
+
 ## 2026-06-14 — Phase 6.7: THREAT_MODEL.md (boundary-driven, traced to this log)
 **Structure.** The model is organized around the system's ACTUAL trust boundaries (B1–B10),
 not a fresh/STRIDE-forced model: each boundary states threat → defense → residual, and every

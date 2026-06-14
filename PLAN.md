@@ -112,13 +112,26 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
       audit (`test_send.py`/`test_reject.py`/`test_auth_jwt.py`); frontend manual.
 
 ## Phase 6 — Security hardening
-- [ ] Secrets to env/managers; remove any from code; `pip-audit` + `npm audit`.
-- [ ] Encrypt PII columns; enforce TLS; CSRF on state-changing routes.
-- [ ] Verify webhook/queue signatures; confirm OAuth scopes are minimal.
-- [ ] Rate limiting (Upstash) on public API + LLM-call guard.
-- [ ] Make `audit_log` append-only; run the adversarial set, confirm containment.
-- [ ] Write `THREAT_MODEL.md`.
+- [x] Secrets to env/managers; remove any from code; `pip-audit` + `npm audit`.
+      (6.6: pip-audit clean; npm 5→2 — glob CVE fixed, `next` cluster documented. 6.8
+      scan: no secret in tree or history; `.env` untracked+gitignored, examples are
+      placeholders-only. Intentional dev-only: `freight-demo-pw`, `postgres:postgres@localhost`.)
+- [~] Encrypt PII columns; enforce TLS; CSRF on state-changing routes.
+      (PARTIAL by design — PII **column encryption de-scoped to at-rest baseline**
+      (Supabase disk encryption; synthetic data) + TLS in transit; real-PII prod delta =
+      THREAT_MODEL R3. CSRF **N/A** on the bearer-token model — 6.3. See DECISIONS 6-kickoff.)
+- [x] Verify webhook/queue signatures; confirm OAuth scopes are minimal.
+      (6.1 QStash `Upstash-Signature` fail-closed; Gmail scopes = `gmail.readonly` + `gmail.send`.)
+- [x] Rate limiting (Upstash) on public API + LLM-call guard.
+      (6.4; fail-open, secondary to auth. Proxy-IP limiter caveat = THREAT_MODEL R2 (Phase 8).)
+- [x] Make `audit_log` append-only; run the adversarial set, confirm containment.
+      (append-only proven in 6.0/Phase 1; 6.5 containment run — both vectors, per-dimension.)
+- [x] Write `THREAT_MODEL.md`.
+      (6.7: boundary-driven B1–B10, traced to DECISIONS; residuals R1–R8.)
 - **Done when:** injection emails can't drive a bad send; no secret in the repo.
+      ✅ verified 2026-06-14: `test_containment.py` (9 passed — fooled-model sweep both
+      vectors + no-auto-send structural test) is the bad-send evidence; secret scan of tree
+      + full git history clean. Full suite 217 passed. **Phase 6 closed.**
 
 ## Phase 7 — Observability + reliability
 - [ ] Sentry on frontend + backend.
