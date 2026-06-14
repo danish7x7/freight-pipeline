@@ -1,6 +1,50 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-14 — Phase 6.6: dependency audit (pip-audit + npm audit)
+**Backend — clean.** `pip-audit` added as a dev dep (`uv add --dev pip-audit`), so the
+scan is reproducible (`uv run pip-audit`) for Phase 8 CI. Result: **no known
+vulnerabilities** across all locked deps. The only "skip" is `freight-pipeline` itself
+(our unpublished package, not on PyPI) — expected, not a finding.
+
+**Frontend — the 5 Phase-5 carry-forward vulns, two clusters.** `npm audit` resolved per
+finding (NOT a blanket `--force`, which would pull `next@16.2.9`, a build-breaking major):
+
+| # | Package | Sev | What | Disposition |
+|---|---------|-----|------|-------------|
+| 1 | `glob` 10.3.10 | high (7.5) | CLI `-c/--cmd` command injection, GHSA-5j98-mcp5-4vw2 (range 10.2.0–10.4.5) | **FIXED** via `overrides: {glob: 10.5.0}` |
+| 2 | `@next/eslint-plugin-next` | high | only flagged: depends on vulnerable glob | **FIXED** (clears with #1) |
+| 3 | `eslint-config-next` | high | only flagged: depends on #2 | **FIXED** (clears with #1) |
+| 4 | `next` 14.2.35 | high | 13 advisories (RSC/Image/middleware/i18n/WS) | **NOT exploitable here; Phase 8/10 carry-forward** |
+| 5 | `postcss` 8.4.31 *bundled in next* | mod | XSS in CSS stringify, GHSA-qx2v-qp2m-jg93 | **build-time only; clears when #4 is bumped** |
+
+**#1–3 (cleanly fixed).** `overrides: {glob: "10.5.0"}` patches the actual CVE: 10.5.0 is
+just above the vulnerable range and stays in glob's v10 major (lowest breakage risk vs.
+glob 11; npm can't comment-key an override, so this rationale lives here). All dev-only
+tooling, and the eslint plugin uses glob as a LIBRARY, not the vulnerable CLI — but it is
+cleanly patchable, so it's patched. Verified post-override: `npm audit` 5→2, and
+`npm run lint && build && typecheck` all pass (no regression). glob also de-dupes to
+10.5.0 under eslint's rimraf.
+
+**#4–5 (not cleanly fixable — per-advisory judgment, not silent acceptance).** The only
+fix npm offers is `next@16.2.9`, a 14→16 **semver-major** that risks breaking the React-18
+App Router build — Phase 8 (deploy) / Phase 10 (console polish) work, and exactly the
+"don't break the build" line. NOT bumped now. Non-exploitability is grounded in what the
+console ACTUALLY uses (verified): **no `middleware.ts`, no i18n, empty `next.config` (no
+rewrites / no `remotePatterns`), no `next/image`, no `beforeInteractive` / CSP-nonce.**
+That makes the Image-Optimizer DoS (GHSA-9g9p/3x4c/h64f), middleware-proxy cache-poisoning
+& bypass (GHSA-3g8h/36qx/ggv3), rewrite smuggling, i18n bypass, WebSocket SSRF (GHSA-c4j6),
+and nonce/`beforeInteractive` XSS (GHSA-ffhc/gx5p) advisories **unreachable** in this
+console. Residual = generic **RSC/App-Router DoS (availability)** on a low-volume,
+Supabase-auth-gated INTERNAL console, largely platform-mitigated on the Vercel deploy
+target. Bundled-postcss XSS (#5) is **build-time** CSS stringify over our own TRUSTED CSS —
+no untrusted CSS input.
+
+**Carry-forward (tracked, not buried):** the `next` 14→16 upgrade (+ aligned
+`eslint-config-next@16`, which also retires the glob override) lands at Phase 8/10 with a
+real build/test pass. This App-Router-DoS residual is ALSO recorded in `THREAT_MODEL.md`
+(6.7) as a tracked residual risk, not only in this table.
+
 ## 2026-06-13 — Phase 6.5: adversarial containment run (both vectors)
 **The run.** `tests/test_containment.py` sweeps the WHOLE adversarial corpus through the
 real `extract()` gate with a fully **fooled model** (`_FooledLLM` returns the attacker's

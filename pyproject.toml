@@ -27,6 +27,7 @@ dev = [
     "mypy>=1.13",
     "psycopg[binary]>=3.3.4",
     "fpdf2>=2.8.7",
+    "pip-audit>=2.10.1",
 ]
 
 [build-system]
