@@ -12,13 +12,18 @@ Error mapping (see DECISIONS): envelope invalid / HFTransientError / DB error �
 returns normally → 2xx → not retried.
 """
 
+import logging
+
 from freight.db.repository import EmailRecord, IngestRepository, RateRecord
 from freight.deals import finalize, rate_key_from
 from freight.extraction import ExtractionOutcome, extract
 from freight.interfaces import LLMClient
 from freight.interfaces.types import QueueMessage
+from freight.observability import bind_correlation_id
 from freight.pdf import StorageReader, UnconfiguredStorageReader, extract_text
 from freight.rates.lookup import RateLookup
+
+logger = logging.getLogger("freight.ingestion.consumer")
 
 
 class IngestError(Exception):
@@ -54,29 +59,39 @@ class IngestConsumer:
         self._rate_lookup: RateLookup = rate_lookup or repo
 
     async def handle(self, message: QueueMessage) -> None:
-        """Process one delivery. Raises only on transient/infra faults (→ retry)."""
-        record = self._repo.get_by_gmail_id(message.id)
-        if record is None:
-            raise IngestError(f"no committed row for id {message.id!r}")
-        if not record.sender:
-            raise IngestError(f"row {message.id!r} has empty sender")
+        """Process one delivery. Raises only on transient/infra faults (→ retry).
 
-        text, review_reason = self._resolve_content(record)
-        if review_reason is not None:
-            outcome = _review(review_reason)
-        else:
-            # HFTransientError (cold-start/429/network) propagates → 5xx → retry.
-            outcome = await extract(self._llm, record.subject, text)
+        The correlation id is bound to ``message.id`` (the gmail_message_id) for the
+        whole delivery, so every downstream log line — extract, rate lookup, finalize —
+        carries the id that traces this one email.
+        """
+        with bind_correlation_id(message.id):
+            record = self._repo.get_by_gmail_id(message.id)
+            if record is None:
+                raise IngestError(f"no committed row for id {message.id!r}")
+            if not record.sender:
+                raise IngestError(f"row {message.id!r} has empty sender")
 
-        contracted = self._lookup_contracted(outcome)
+            text, review_reason = self._resolve_content(record)
+            if review_reason is not None:
+                outcome = _review(review_reason)
+            else:
+                # HFTransientError (cold-start/429/network) propagates → 5xx → retry.
+                outcome = await extract(self._llm, record.subject, text)
 
-        with self._repo.begin() as conn:
-            finalize(
-                conn,
-                self._repo,
-                gmail_message_id=record.gmail_message_id,
-                outcome=outcome,
-                contracted_rate=contracted,
+            contracted = self._lookup_contracted(outcome)
+
+            with self._repo.begin() as conn:
+                finalize(
+                    conn,
+                    self._repo,
+                    gmail_message_id=record.gmail_message_id,
+                    outcome=outcome,
+                    contracted_rate=contracted,
+                )
+            logger.info(
+                "ingest processed",
+                extra={"status": outcome.status, "intent": outcome.intent},
             )
 
     def _lookup_contracted(self, outcome: ExtractionOutcome) -> RateRecord | None:

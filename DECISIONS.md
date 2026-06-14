@@ -1,6 +1,49 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-14 — Phase 7 triage: local-now vs deploy-time (front-load local)
+**The split (recorded so Phase 7 doesn't quietly become half of Phase 8).** Buildable +
+testable LOCALLY now: structured JSON logs + correlation id (7.1); health/readiness +
+retries-with-backoff + DLQ replay (7.2); Prometheus metrics instrumentation + `/metrics`
+(7.3); `RECOVERY.md` runbook (7.4, backed by 7.2). Genuinely DEPLOY-TIME (Phase 8):
+Grafana Cloud dashboard, Sentry DSN wiring, Supabase backups toggle, uptime monitor —
+for each, the instrumentation/seam is local; only the external destination is wired at
+deploy. **The done-when splits too:** "trace one email end to end" is the LOCAL gate
+(correlation-id logs); "the dashboard is live" is the DEPLOY gate (Phase 8). Ordering
+front-loads the local tasks 7.1 → 7.4.
+
+## 2026-06-14 — Phase 7.1: structured JSON logs + correlation id (ingest -> send)
+**Dependency-free.** A small `logging.Formatter` (`JsonFormatter`) emits one JSON object
+per record; a `contextvars.ContextVar` (`correlation_id`) + a `logging.Filter` stamp the
+id onto every record. No structlog/json-logger dep — right-sized. `configure_logging` is
+idempotent (re-installs a single named handler) and called from the API app factory and
+the worker entrypoint (replacing the old `basicConfig`).
+
+**Correlation id = the originating `gmail_message_id`** — the same key that idempotently
+identifies one inbound email — so one email traces end to end by grepping one id.
+`bind_correlation_id` is a context manager that resets on exit (no leakage across messages
+or async tasks; contextvars are per-task). Bound at three seams: the consumer `handle()`
+(covers extract → rate → finalize), the poller `_publish()` (both front-door and the
+reconciliation sweep), and `send_quote`.
+
+**The send threads the REAL end-to-end id (no degradation).** `send_quote` already resolves
+`email = repo.get_deal_email(deal.id)` BEFORE the send, so the originating
+`email.gmail_message_id` is in scope at zero extra cost — bound there, the human send logs
+under the SAME id ingest used. (The `gmail.send` return is the new OUTBOUND message id,
+logged as a field, never the correlation key.) So "trace one email end to end" is genuine,
+not "ingest→finalize only".
+
+**Seam noted honestly:** `reject_deal` does NOT fetch the inbound email (it sends nothing),
+so it is NOT yet bound to a correlation id — its log lines thread under no id (or could bind
+`deal_id` later). Reject is a terminal side-branch, not on the ingest→send path, so this is
+acceptable; recorded here rather than left as a silent gap. If reject-path tracing is wanted,
+bind `deal_id` (or fetch the email) in a follow-up.
+
+**Tested (hermetic):** `tests/test_logging.py` — valid JSON + required keys; id present when
+bound / null when not; contextvar resets (no leakage across blocks); extras merged; exception
+captured; one bound block threads a single id. Smoke-verified the real stdout JSON. Full suite
+224 passed.
+
 ## 2026-06-14 — Phase 6.8: close-out (verify-and-record; Phase 6 closed)
 **Not a rebuild — verification.** No code changed. The two done-when gates were verified
 by scan/test, and the PLAN Phase 6 boxes ticked honestly.

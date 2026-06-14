@@ -32,6 +32,7 @@ from freight.factories import build_gmail_client, build_queue
 from freight.ingestion.idempotency import ClaimGate
 from freight.interfaces import GmailClient, Queue
 from freight.interfaces.types import QueueMessage
+from freight.observability import bind_correlation_id
 
 logger = logging.getLogger("freight.poller")
 
@@ -94,9 +95,12 @@ class Poller:
         return len(stuck)
 
     async def _publish(self, gmail_message_id: str) -> None:
-        # Claim row is already committed; publish then mark queued.
-        await self._queue.publish(QueueMessage(id=gmail_message_id, payload={}))
-        self._repo.set_ingest_status(gmail_message_id, "queued")
+        # Claim row is already committed; publish then mark queued. Bind the correlation
+        # id here so both the front-door and the sweep publish under the email's id.
+        with bind_correlation_id(gmail_message_id):
+            await self._queue.publish(QueueMessage(id=gmail_message_id, payload={}))
+            self._repo.set_ingest_status(gmail_message_id, "queued")
+            logger.info("published to queue")
 
 
 def build_poller(settings: Settings) -> Poller:

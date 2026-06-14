@@ -12,6 +12,7 @@ resumes at step 3 — same idempotent path, no new claim. A Gmail failure leaves
 'claimed' (502); the reviewer retries and it resumes.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import cast
 
@@ -20,6 +21,9 @@ from freight.db.repository import IngestRepository
 from freight.deals import DealState, TransitionError, advance
 from freight.interfaces import GmailClient
 from freight.interfaces.types import OutboundMessage
+from freight.observability import bind_correlation_id
+
+logger = logging.getLogger("freight.sending")
 
 
 class SendError(Exception):
@@ -86,57 +90,62 @@ def send_quote(
     if email is None:
         raise SendError(409, "no inbound email to reply to")
 
-    subject = f"Re: {email.subject}" if email.subject else "Re: your rate request"
+    # Bind the ORIGINATING email's id so the send traces back to the same correlation
+    # id ingest used — one email, ingest -> send, under one id. (gmail.send returns the
+    # new OUTBOUND id, logged as a field, not used as the correlation key.)
+    with bind_correlation_id(email.gmail_message_id):
+        subject = f"Re: {email.subject}" if email.subject else "Re: your rate request"
 
-    # TX-A: claim + audit (atomic). Already-sent → 409, no double-send.
-    with repo.begin() as conn:
-        claim = repo.claim_send(
-            conn,
-            quote_id=quote_id,
-            deal_id=deal.id,
-            to_email=email.sender,
-            subject=subject,
-            body=body,
-            created_by=reviewer.uid,
-        )
-        if claim.status == "sent":
-            raise SendError(409, "quote already sent")
-        repo.insert_audit(
-            conn,
-            actor=reviewer.uid,
-            actor_email=reviewer.email,
-            action="email.send.claimed",
-            entity_type="deals",
-            entity_id=deal.id,
-            detail={"quote_id": quote_id},
-        )
-
-    # Gmail send AFTER the claim commits (failure → 502, claim stays recoverable).
-    try:
-        gmail_message_id = gmail.send(
-            OutboundMessage(
-                to=email.sender,
+        # TX-A: claim + audit (atomic). Already-sent → 409, no double-send.
+        with repo.begin() as conn:
+            claim = repo.claim_send(
+                conn,
+                quote_id=quote_id,
+                deal_id=deal.id,
+                to_email=email.sender,
                 subject=subject,
                 body=body,
-                in_reply_to=email.gmail_message_id,
-                # Marker for future send dedup (the at-least-once window). A retry can,
-                # later, check the mailbox for this marker before re-sending.
-                headers={"X-Freight-Quote-Id": quote_id},
+                created_by=reviewer.uid,
             )
-        )
-    except Exception as exc:
-        raise SendError(502, "gmail send failed; retry to resume") from exc
+            if claim.status == "sent":
+                raise SendError(409, "quote already sent")
+            repo.insert_audit(
+                conn,
+                actor=reviewer.uid,
+                actor_email=reviewer.email,
+                action="email.send.claimed",
+                entity_type="deals",
+                entity_id=deal.id,
+                detail={"quote_id": quote_id},
+            )
 
-    # TX-B: mark sent + audit.
-    with repo.begin() as conn:
-        repo.mark_sent(conn, send_id=claim.id, gmail_message_id=gmail_message_id)
-        repo.insert_audit(
-            conn,
-            actor=reviewer.uid,
-            actor_email=reviewer.email,
-            action="email.sent",
-            entity_type="deals",
-            entity_id=deal.id,
-            detail={"quote_id": quote_id, "gmail_message_id": gmail_message_id},
-        )
-    return SendResult(send_id=claim.id, gmail_message_id=gmail_message_id)
+        # Gmail send AFTER the claim commits (failure → 502, claim stays recoverable).
+        try:
+            gmail_message_id = gmail.send(
+                OutboundMessage(
+                    to=email.sender,
+                    subject=subject,
+                    body=body,
+                    in_reply_to=email.gmail_message_id,
+                    # Marker for future send dedup (the at-least-once window). A retry
+                    # can later check the mailbox for this marker before re-sending.
+                    headers={"X-Freight-Quote-Id": quote_id},
+                )
+            )
+        except Exception as exc:
+            raise SendError(502, "gmail send failed; retry to resume") from exc
+
+        # TX-B: mark sent + audit.
+        with repo.begin() as conn:
+            repo.mark_sent(conn, send_id=claim.id, gmail_message_id=gmail_message_id)
+            repo.insert_audit(
+                conn,
+                actor=reviewer.uid,
+                actor_email=reviewer.email,
+                action="email.sent",
+                entity_type="deals",
+                entity_id=deal.id,
+                detail={"quote_id": quote_id, "gmail_message_id": gmail_message_id},
+            )
+        logger.info("quote sent", extra={"quote_id": quote_id})
+        return SendResult(send_id=claim.id, gmail_message_id=gmail_message_id)
