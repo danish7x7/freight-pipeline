@@ -26,7 +26,9 @@ onboarding, and scheduling.
 - New migration: `supabase migration new <name>` ; apply: `supabase db push`
 - Test: `uv run pytest` ; lint/type: `uv run ruff check . && uv run mypy .`
 - Frontend dev: `cd web && npm run dev`
-Run lint, type-check, and tests before considering any task done.
+Run lint, type-check, and tests before considering any task done. Read each gate's
+output directly and check its exit code per command — never pipe lint/type-check to
+`>/dev/null` and infer success from a later step (a masked failure then ships).
 
 ## Architecture invariants (do not violate)
 - Build against interfaces: `LLMClient`, `GmailClient`, and the queue. Swap
