@@ -1,6 +1,27 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-14 — Phase 6.7: THREAT_MODEL.md (boundary-driven, traced to this log)
+**Structure.** The model is organized around the system's ACTUAL trust boundaries (B1–B10),
+not a fresh/STRIDE-forced model: each boundary states threat → defense → residual, and every
+defense is **traced to its DECISIONS entry** (6.1 QStash sig, 6.2 CRON_SECRET, 6.3 CORS/JWT,
+6.4 limiter, Phase 1 RLS, Phase 4 state machine + MC gate, Phase 5 send gate) so the doc stays
+faithful to what was built and is re-auditable against this log. Not re-derived; cited.
+
+**Centerpiece.** §5 is the injection defense: allowlist-REJECT gate + capped confidence +
+human gate, on BOTH vectors, **proven by the 6.5 containment run** (fooled-model, per-dimension
+assertions, no-auto-send). Framed as the system's novelty.
+
+**Residuals are explicit (R1–R8), not buried.** Per the 6.7 ask, the three named residuals are
+surfaced as first-class items: R5 the `next` 14→16 App-Router-DoS carry-forward (with the
+unreachable-advisory reasoning), R2 the rate-limiter proxy-IP caveat, R3 the PII at-rest baseline
+/ real-PII prod delta. Plus R1 real-model accuracy = Phase 9, R4 send at-least-once double-send
+window, R6 best-effort cron, R7 the Phase 8 wiring carry-forwards, R8 misclassification is a
+quality not safety property.
+
+**Maintenance.** Doc-only task (no code; lint/types/tests still green at 217). THREAT_MODEL.md
+states it reflects DECISIONS through 6.6 and must be updated alongside this log.
+
 ## 2026-06-14 — Phase 6.6: dependency audit (pip-audit + npm audit)
 **Backend — clean.** `pip-audit` added as a dev dep (`uv add --dev pip-audit`), so the
 scan is reproducible (`uv run pip-audit`) for Phase 8 CI. Result: **no known
