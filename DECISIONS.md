@@ -1,7 +1,30 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
-## 2026-06-16 — Reply threading: recipient-side needs RFC headers, not threadId
+## 2026-06-16 — CARRY-FORWARD (Phase 9 / Phase 10): computed rate is NOT route-sensitive
+**Finding (diagnostic only — not fixed now).** The computed-rate fallback
+(`src/freight/rates/formula.py` `compute_rate`) is **route-blind**: it reads only
+`key.equipment` and ignores origin/destination. Distance is a hardcoded constant
+`_FLAT_MILES = 800` (no lookup table, no geocoding, no distance API — nothing to "default"
+from; it's a literal placeholder by design). So:
+`amount = base_by_equipment + (_FLAT_MILES × _PER_MILE_CENTS) + _FUEL_SURCHARGE_CENTS`.
+For `dry_van`: `80_000 + 800×150 + 20_000 = 220_000` = **$2,200** for EVERY dry-van lane.
+That's why Chicago→Dallas (~925mi) and San Jose→Dallas (~1700mi) returned the identical
+$2,200 — same equipment, fixed distance term. $2,200 is formula output, not a hardcoded
+literal; the amount varies by equipment (reefer = $2,500, etc.) but **never by route**.
+
+**Why captured here.** The file already labels itself a placeholder ("Real distance/pricing
+is a future task"), but the route-collision is now observed live and will bite two phases:
+- **Phase 9 (eval):** the eval over the synthetic set will expose flat, route-insensitive
+  pricing — any rate-accuracy/realism metric is meaningless until distance is a real input.
+- **Phase 10 (showcase):** a demo that quotes the same price for a 925mi and a 1700mi lane
+  is not credible; the showcase needs route-sensitive rates.
+
+**Needed before eval + demo:** a distance-aware formula — either a real mileage source
+(a city/lane distance lookup table, or a geocoding/distance API behind an interface) or a
+documented mileage assumption per lane. Keep it behind the existing seam so `rates` stays
+append-only and the fuel-surcharge cron still writes versions. NOT changed now (continuing
+to the Vercel deploy); logged so it isn't forgotten at Phase 9/10.
 **The bug.** Quote replies started a NEW conversation in the recipient's inbox.
 `send_quote` fed `_to_raw` the **Gmail API id** (`email.gmail_message_id`) as
 `in_reply_to`, and set **no `threadId`**. `_to_raw`'s plumbing was already correct (it
