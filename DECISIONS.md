@@ -1,6 +1,74 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-15 — Phase 8.3b: Storage reader swap + QStash finding (PDF write path → 8.3c)
+Scope: replace the Storage placeholder's READ side + verify the live QStash delivery path +
+run the body-path cloud e2e. The PDF write path is split out to 8.3c (below).
+
+**Storage reader.** New `freight.storage.SupabaseStorageReader` (satisfies the
+`freight.pdf.StorageReader` Protocol): sync httpx `GET {SUPABASE_URL}/storage/v1/object/
+{bucket}/{path}` with `Authorization: Bearer {service_role_key}` + `apikey`, authorizing the
+PRIVATE bucket. Bucket from a NEW env var `SUPABASE_STORAGE_BUCKET` (never hardcoded; default
+`""`). Wired in `get_consumer()` ONLY when the bucket is configured — otherwise the consumer
+keeps the `UnconfiguredStorageReader` placeholder (body-only path), so local/dev is unaffected;
+env-driven swap, no code change to flip. A non-200 / network error raises `StorageError` →
+consumer raises → /ingest 5xx → QStash retry → DLQ, preserving the placeholder's
+raise-don't-drop posture (a transient Storage blip never silently drops a document). The
+extraction + validation trust boundary is unchanged: PDF text still runs the same allowlist-
+reject gate. `storage_path` is the in-bucket object key (the format 8.3c's writer will store).
+Unit-tested with a mocked client (URL/auth asserted, non-200 + network → StorageError, Protocol
+satisfied); the live bucket is exercised in the e2e, not unit tests.
+
+**QStash delivery path — confirmed PROGRAMMATIC, no manual registration.** `QStashQueue.publish`
+POSTs `{qstash_url}/v2/publish/{destination_url}` with `Authorization: Bearer {token}` +
+`Upstash-Retries`. Confirmed against the live Upstash docs: the destination is a RAW URL
+appended to the path — direct-URL publish needs NO pre-registered topic/URL-group. So nothing
+to create in the Upstash console; the account token + signing keys + destination/expected URL
+(already in Render env) are sufficient. The `qstash.py` ⚠️ is cleared (path / `Upstash-Retries`
+= 1+retries / auto-DLQ all confirmed). **Verifier (6.1) unchanged:** `Receiver(current, next)`
+tries current→next (rotation-safe) and matches the `sub` claim against `QSTASH_EXPECTED_URL`;
+the route is fail-closed (any verifier exception → 401). No semantic change.
+
+**Prepared-statement fix held, NOT pre-emptive.** The Supabase transaction pooler doesn't
+support prepared statements; SQLAlchemy+psycopg3 use them by default. `/ready` survived (trivial
+query). IF the first real finalize/send trips `prepared statement already exists`, the fix is
+engine-level in `make_engine` (`connect_args` `prepare_threshold=None` for psycopg3), NOT URL
+params — to be logged here with the pgbouncer context when/if applied.
+
+**8.3b done-when = the body-path e2e** (order email → poll → QStash → /ingest → extract live
+Llama-3.3-70B → validate → rate → review → human send, with audit + at-least-once
+no-double-send). The PDF-through-bucket clause was REMOVED from 8.3b and moved to 8.3c, because
+it structurally cannot be met by a reader swap (see below). PLAN updated to match.
+
+## 2026-06-15 — Phase 8.3c (CARRY-FORWARD): attachment WRITE path never existed
+**Why this is its own task.** 8.3b's original done-when ("a PDF routes through the bucket")
+assumed an attachment ingestion chain that DOES NOT EXIST anywhere in the live path, confirmed
+by grep: `gmail/client.py` extracts the email BODY only (no attachment fetch);
+`InboundMessage.attachment_refs` is populated ONLY by synthetic data; `claim_insert` writes the
+email row, not attachments. So a real inbox PDF is silently dropped — Gmail client never
+surfaces it, the poller inserts no `attachments` row, and the consumer's `get_attachments`
+returns `[]` → falls back to body. Making a PDF flow is a NET-NEW, multi-surface feature, not a
+placeholder swap, so it gets its own one-task-at-a-time scope rather than burying the deploy
+gate.
+
+**The work:**
+- **W1 — Gmail attachment fetch.** Extend the Gmail client to fetch attachment bytes
+  (`users.messages.attachments.get`) and surface PDF parts (filename, mime, bytes). Requires a
+  richer inbound type than today's body-only `InboundMessage`.
+- **W2 — bucket upload + DB row, idempotent on redelivery.** During the poll/claim flow, upload
+  each PDF to the `attachments` bucket (object key e.g. `{gmail_message_id}/{filename}`) and
+  insert an `attachments` row (`email_message_id`, `storage_path`, `file_type='pdf'`,
+  `mime_type`). Must be idempotent under at-least-once redelivery (re-upload/re-insert must not
+  duplicate — key the object path on `gmail_message_id` and guard the row insert).
+- Add the WRITER method to `SupabaseStorageReader` (POST `storage/v1/object/{bucket}/{key}`)
+  alongside its W2 caller.
+
+**Done-when (8.3c):** a real inbox PDF flows poll → upload → `attachments` row → /ingest →
+consumer reads it from the real bucket via `SupabaseStorageReader.read` → `extract_text` → the
+SAME extraction + validation gate (allowlist-reject; injection containment holds on the
+attachment vector). Unchanged invariants: at-least-once send, `gmail_message_id` idempotency,
+human send gate, untrusted-fields gate.
+
 ## 2026-06-15 — Phase 8.3a: backend made deploy-ready (env-only config; psycopg fix)
 Scope was 8.3a ONLY: make the container deploy-ready + prove boot-time config resolution
 against live infra. NO Storage swap, NO QStash target registration — those are 8.3b. Not

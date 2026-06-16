@@ -3,13 +3,13 @@
 Publishes a message to Upstash QStash, which then delivers it (push, at-least-once) to
 the consumer endpoint and DLQs it after retries are exhausted.
 
-⚠️ VERIFY AGAINST CURRENT UPSTASH QSTASH DOCS AT LIVE-WIRING (Phase 8). The following
-are plausible and correct enough for a MockTransport-tested slice, but are NOT confirmed
-against a live account here:
-  - publish path ``/v2/publish/{destination_url}``
-  - retry header name ``Upstash-Retries`` (counts retries AFTER the first attempt)
-  - automatic DLQ after retries are exhausted
-Do not treat these strings as verified until checked live.
+CONFIRMED against the live Upstash QStash docs (Phase 8.3b, 2026-06-15):
+  - publish path ``/v2/publish/{destination_url}`` — the destination is a raw URL
+    appended to the path; NO pre-registration / topic needed (direct-URL publish).
+  - retry header ``Upstash-Retries`` — total deliveries = 1 + retries.
+  - automatic DLQ after retries are exhausted.
+The signing keys + token are account-level (set in Render env); QStash signs each
+delivery and the /ingest verifier (6.1) checks current→next + the sub claim.
 """
 
 import httpx

@@ -184,9 +184,19 @@ Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DEC
       hard-fail), JWKS/issuer resolve live. Caught + fixed a deploy blocker: `psycopg[binary]`
       was dev-only → `--no-dev` image had no Postgres driver; promoted to runtime deps
       (`/ready` flipped 500→503). See DECISIONS 2026-06-15.
-- [ ] **8.3b** Deploy backend to **Render free tier** (Dockerfile); replace
-      `UnconfiguredStorageReader` with Supabase Storage; register QStash target. (Human
-      pushes to Render — design-review hand-off.)
+- [x] Backend deployed to **Render free tier** (Dockerfile); `/health` + `/ready` green
+      against live Supabase + Upstash; backends flipped to real (hf/gmail/qstash).
+- [ ] **8.3b** Storage **reader** swap (real `SupabaseStorageReader`, env-driven via
+      `SUPABASE_STORAGE_BUCKET`, placeholder fallback when unset) + **body-path cloud e2e**.
+      QStash publish is programmatic (raw-URL `/v2/publish` — no console registration);
+      verifier current→next + sub, fail-closed unchanged. **Done when:** an order email flows
+      poll → QStash → /ingest → extract (live Llama-3.3-70B) → validate → rate → review →
+      human send on the deployed backend, with audit + at-least-once no-double-send. See
+      DECISIONS 2026-06-15.
+- [ ] **8.3c** Attachment **write** path (the chain that never existed): W1 Gmail attachment
+      fetch; W2 bucket upload + `attachments`-row insert, idempotent on redelivery; Storage
+      writer method. **Done when:** a real inbox PDF routes through the `attachments` bucket →
+      consumer reads it → same extraction+validation gate. See DECISIONS 2026-06-15.
 - [ ] Deploy Next.js console on Vercel with secrets wired.
 - [ ] Connection strings in GitHub Secrets + provider secret stores.
 - [ ] CI/CD: lint/type/test/build/deploy on push; branch protection; PR previews.

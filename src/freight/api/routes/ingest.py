@@ -35,6 +35,7 @@ from freight.security.qstash_verifier import (
     SignatureError,
     build_qstash_verifier,
 )
+from freight.storage import SupabaseStorageReader
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +46,15 @@ def get_consumer() -> IngestConsumer:
     """Build the consumer from config (overridden in tests)."""
     settings = get_settings()
     repo = IngestRepository(make_engine(settings.database_url))
-    # Storage defaults to the Phase 8 placeholder (PDF byte reads land then).
-    return IngestConsumer(repo, build_llm_client(settings))
+    # Real Supabase Storage reader only when a bucket is configured (Render); otherwise
+    # the consumer falls back to the UnconfiguredStorageReader placeholder (body-only
+    # path). Env-driven swap — no code change to flip. (8.3b)
+    storage = (
+        SupabaseStorageReader.from_settings(settings)
+        if settings.supabase_storage_bucket
+        else None
+    )
+    return IngestConsumer(repo, build_llm_client(settings), storage=storage)
 
 
 def get_qstash_verifier() -> QStashVerifier:

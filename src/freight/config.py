@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
     database_url: str = ""
+    # Private Storage bucket for PDF attachments (8.3b). Empty => the consumer keeps the
+    # UnconfiguredStorageReader placeholder (body-only path); set on Render to activate
+    # the real Supabase Storage reader. Never hardcoded — env-driven.
+    supabase_storage_bucket: str = ""
 
     # --- Redis (Upstash) ---
     # Env-only; no localhost fallback (8.3a). Set in .env for local dev.
