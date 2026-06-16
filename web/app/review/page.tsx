@@ -7,9 +7,13 @@ import { getSupabase } from "@/lib/supabase";
 import { Card } from "@/components/ui";
 import { type DealRow, dollars, lane } from "@/lib/types";
 
+// `deals` has TWO FK paths to `quotes` (quotes.deal_id and deals.accepted_quote_id), so
+// the embed must name the constraint or PostgREST refuses it (PGRST201, 300 Multiple
+// Choices). We want the deal's quotes via quotes.deal_id. email_messages has one FK, so
+// it needs no hint.
 const SELECT =
   "id, origin_city, origin_state, dest_city, dest_state, equipment," +
-  " quotes(id, amount_cents, currency, is_computed)," +
+  " quotes!quotes_deal_id_fkey(id, amount_cents, currency, is_computed)," +
   " email_messages(sender, subject, body, confidence)";
 
 export default function ReviewQueue() {
@@ -29,7 +33,12 @@ export default function ReviewQueue() {
       }
       setEmail(session.user.email ?? null);
       // RLS scopes deals to the signed-in reviewer (or all, for admin).
-      const { data } = await getSupabase().from("deals").select(SELECT).eq("state", "quoted");
+      const { data, error } = await getSupabase()
+        .from("deals")
+        .select(SELECT)
+        .eq("state", "quoted");
+      // Surface query errors — a swallowed PGRST201 once looked like an empty queue.
+      if (error) console.error("review queue query failed:", error);
       setDeals((data as unknown as DealRow[] | null) ?? []);
       setLoading(false);
     })();
