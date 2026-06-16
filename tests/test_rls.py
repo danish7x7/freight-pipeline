@@ -108,9 +108,21 @@ def test_rls_isolation_and_escalation(conn: "psycopg.Connection") -> None:
     cur.execute("select id from public.deals")
     assert str(_scalar(cur)) == A_DEAL
 
-    # A cannot UPDATE B's deal (deals are server-side-write-only: 0 rows).
-    cur.execute("update public.deals set state='rejected' where id=%s", (B_DEAL,))
-    assert cur.rowcount == 0
+    # A cannot mutate B's deal — server-side-write-only holds at whichever layer the
+    # environment enforces it. Our migration grants SELECT-only on deals, so hosted
+    # Supabase denies at the GRANT layer (permission denied = InsufficientPrivilege);
+    # the local CLI stack adds a broad GRANT ALL we don't intend, so there the statement
+    # reaches RLS and is filtered to 0 rows (no deals UPDATE policy). Assert the
+    # security OUTCOME (write blocked), not the mechanism. The savepoint contains a
+    # possible privilege error so the remaining checks still run.
+    try:
+        with conn.transaction():
+            cur.execute(
+                "update public.deals set state='rejected' where id=%s", (B_DEAL,)
+            )
+            assert cur.rowcount == 0  # reached only where UPDATE granted: RLS denied
+    except psycopg.errors.InsufficientPrivilege:
+        pass  # grant-layer denial — also a valid "write blocked"
 
     # A cannot see a NULL-deal_id email (NULL => admin only).
     cur.execute("select count(*) from public.email_messages where id=%s", (NULL_EMAIL,))
@@ -146,6 +158,11 @@ def test_rls_isolation_and_escalation(conn: "psycopg.Connection") -> None:
 
     # ===================== admin =====================
     _become(cur, ADMIN)
+
+    # Backstop: A's blocked UPDATE never landed, by whichever layer denied it — so the
+    # either-form acceptance above can't pass vacuously.
+    cur.execute("select state from public.deals where id=%s", (B_DEAL,))
+    assert _scalar(cur) == "new_enquiry"
 
     # Scoped to the two created deals so seed/demo data can't perturb the count.
     cur.execute(

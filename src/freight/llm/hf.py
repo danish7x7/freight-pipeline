@@ -8,10 +8,14 @@ Failure model (so the consumer can map transient→retry, content→review):
 - a 2xx whose model content is not valid JSON → a LOW-confidence ``LLMResult`` (never
   crash) → routes to review downstream.
 
-⚠️ VERIFY AGAINST CURRENT HF DOCS AT LIVE-WIRING (Phase 8): the path
-``/v1/chat/completions``, request shape (``model``/``messages``/``response_format``),
-and the ``choices[0].message.content`` response shape. MockTransport-tested, not
-confirmed against a live account.
+CONFIRMED against the live Inference Providers API (Phase 8.2, 2026-06-15; see
+DECISIONS): base ``https://router.huggingface.co`` + ``/v1/chat/completions``; request
+``{model, messages, response_format}``; response ``choices[0].message.content``; auth
+``Bearer``. ``response_format={"type": "json_object"}`` is HONORED server-side
+(enforced) on the pinned model, so no ``json_schema``/strict is needed. The pin is
+``HF_MODEL=meta-llama/Llama-3.3-70B-Instruct``; a bare ``org/model`` auto-routes to the
+fastest provider (``:fastest`` default) — a ``:provider``/``:cheapest`` suffix is an
+optional reproducibility lever (Phase 9).
 """
 
 import json

@@ -134,7 +134,7 @@ already logged in `DECISIONS.md`, surfaced here so they are not buried in the ch
   classification accuracy, injection containment). Per the fork, 6.5 used a deterministic
   fooled mock by design.
 - **R2 — Rate-limiter proxy-IP caveat (6.4).** Behind the Phase 8 deploy proxy
-  (Fly/Railway), `request.client.host` is the *proxy's* IP, so per-client limiting is coarse
+  (Render — see DECISIONS 2026-06-15), `request.client.host` is the *proxy's* IP, so per-client limiting is coarse
   (per-proxy) until a trusted `X-Forwarded-For` / platform client-IP header is wired.
   Mitigations: the auth gates (B1–B3) are the primary control; the limiter is secondary and
   fail-open by design.

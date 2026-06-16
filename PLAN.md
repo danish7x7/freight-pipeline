@@ -11,8 +11,10 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
   observability until a synthetic email flows ingest → extract → rate → review →
   send locally.
 - Each phase has a **done-when** gate. Don't advance until it's true.
-- Deep detail lives in the companion docs: `order_pipeline_build_plan.md` (runbook),
-  `cloud_deployment_zero_cost.md` (deploy), `production_stack_blueprint.md` (layers).
+- Deep detail lives in `DECISIONS.md` (the per-phase decision log) and the deploy runbook
+  `cloud_deployment_zero_cost.md`. (The earlier `order_pipeline_build_plan.md` and
+  `production_stack_blueprint.md` referenced here were never written — PLAN.md + DECISIONS.md
+  are the build plan and the layer/architecture record. See DECISIONS 2026-06-15.)
 
 ---
 
@@ -61,7 +63,9 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
 
 ## Phase 3 — Extraction
 - [x] `LLMClient` against HF serverless inference; structured/JSON decoding.
-      (HFLLMClient slice, chat-completions, HFTransientError taxonomy; ⚠️ verify @ Phase 8.)
+      (HFLLMClient slice, chat-completions, HFTransientError taxonomy. ✅ Phase 8.2: shape
+      CONFIRMED vs live Inference Providers API; `HF_MODEL` pinned to
+      meta-llama/Llama-3.3-70B-Instruct; json_object honored server-side. See DECISIONS 2026-06-15.)
 - [x] Classify intent (rate_request / negotiation / rc / contract / other).
       (Intent is a field of the single structured extraction call.)
 - [x] Extract fields under the Pydantic schema; score confidence.
@@ -158,7 +162,31 @@ Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DEC
       logs (7.1) — smoke-verified. ⏳ DEPLOY gate (dashboard live) = Phase 8. Full suite 243.
 
 ## Phase 8 — Deployment
-- [ ] Deploy backend container (Fly.io/Railway), always-on; register QStash target.
+> Host correction (2026-06-15): backend is **Render free tier** (Fly.io & Railway both
+> dropped their free tiers in 2026), deployed from the retained **Dockerfile**. Cold-start
+> -on-idle (sleeps after 15 min, ~30–60s wake) is ACCEPTABLE — the backend is cron/queue-
+> driven, not user-facing, and the `*/5` poll cron keeps it warm. **DB stays Supabase,
+> queue/cache stays Upstash; do NOT create a Render Postgres** (Render's free Postgres is
+> deleted after 30 days and we don't use it — Render hosts only the FastAPI web service).
+> Supabase issued LEGACY anon/service_role keys (not the new `sb_publishable_`/`sb_secret_`
+> format), so the Phase 5 JWKS/ES256 auth needs no change. See DECISIONS 2026-06-15.
+- [x] **8.1** Apply `supabase/migrations/` to live Supabase + verify RLS deny-side AND the
+      positive read path against the live DB. (10/10 local==remote; migration #10 added —
+      write-grant REVOKE on the server-side-write-only tables + RLS helpers relocated to a
+      private schema; live integration test green; advisor clean. See DECISIONS 2026-06-15.)
+- [x] **8.2** Confirm HF live API + pin the model. (Shape confirmed vs Inference Providers;
+      `HF_MODEL=meta-llama/Llama-3.3-70B-Instruct` pinned — 4/4 clean extraction vs 7B's 2/4;
+      json_object honored server-side; real-model injection containment 6/6 both vectors. See
+      DECISIONS 2026-06-15.)
+- [x] **8.3a** Backend made deploy-ready (no deploy yet). CORS reuses `CORS_ALLOW_ORIGINS`,
+      default flipped to `""` (fail-closed); all dev-value defaults removed from `config.py`
+      (env-only); container builds + boots env-only with `/health` 200, `/ready` 503 (DB
+      hard-fail), JWKS/issuer resolve live. Caught + fixed a deploy blocker: `psycopg[binary]`
+      was dev-only → `--no-dev` image had no Postgres driver; promoted to runtime deps
+      (`/ready` flipped 500→503). See DECISIONS 2026-06-15.
+- [ ] **8.3b** Deploy backend to **Render free tier** (Dockerfile); replace
+      `UnconfiguredStorageReader` with Supabase Storage; register QStash target. (Human
+      pushes to Render — design-review hand-off.)
 - [ ] Deploy Next.js console on Vercel with secrets wired.
 - [ ] Connection strings in GitHub Secrets + provider secret stores.
 - [ ] CI/CD: lint/type/test/build/deploy on push; branch protection; PR previews.
@@ -185,5 +213,5 @@ Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DEC
 ## Sequencing reminder
 The fastest path to something demoable is phases 0→5 with mocks where needed. Resist
 jumping ahead to security or observability before the spine flows. When you fall
-behind, consult the de-scoping ladder in `order_pipeline_build_plan.md` — cut from
-the bottom, never the queue, versioned rates, human gate, or injection validation.
+behind, apply the de-scoping ladder — cut from the bottom, never the queue, versioned
+rates, human gate, or injection validation.

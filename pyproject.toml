@@ -18,6 +18,10 @@ dependencies = [
     "pyjwt[crypto]>=2.13.0",
     "qstash>=3.4.0",
     "prometheus-client>=0.25.0",
+    # Postgres driver — RUNTIME dep: make_engine normalizes URLs to postgresql+psycopg://
+    # so every DB path needs it. (Was dev-only in Phase 1; promoted at 8.3a — the --no-dev
+    # image had no driver and /ready + all DB routes 500'd. See DECISIONS 2026-06-15.)
+    "psycopg[binary]>=3.3.4",
 ]
 
 [dependency-groups]
@@ -26,7 +30,6 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
     "mypy>=1.13",
-    "psycopg[binary]>=3.3.4",
     "fpdf2>=2.8.7",
     "pip-audit>=2.10.1",
 ]

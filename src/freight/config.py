@@ -9,7 +9,6 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,16 +31,18 @@ class Settings(BaseSettings):
     # --- App ---
     app_env: AppEnv = AppEnv.local
     log_level: str = "INFO"
-    app_secret: str = "dev-only-insecure-secret"
+    # Env-only; no dev fallback (8.3a). Local values come from .env (see .env.example).
+    app_secret: str = ""
     # Shared bearer secret for the cron-triggered endpoints (/poll, /jobs/surcharge).
     # Env-only; one secret for both. Empty => the endpoints reject all callers
     # (fail-closed), which is correct until the Phase 8 GitHub Secret is wired.
     cron_secret: str = ""
     # Browser origins allowed to call the API (the Next.js review console). Comma-
     # separated; env-driven so Phase 8 wires the Vercel origin without a code change.
-    # Empty => no origins allowed (fail-closed; browser CORS blocked). Only the
+    # Default is EMPTY => no origins allowed (fail-closed; browser CORS blocked) — no
+    # permissive dev default (8.3a). Local dev sets http://localhost:3000 in .env. Only
     # /review/* routes are browser-facing — the cron/QStash routes are server-to-server.
-    cors_allow_origins: str = "http://localhost:3000"
+    cors_allow_origins: str = ""
     # Rate limiting (Phase 6.4). Secondary to the auth gates and FAIL-OPEN on a Redis
     # outage — never the primary access control. ``public_rate_limit_per_minute`` caps
     # per-client hits on each external POST route; ``llm_calls_per_minute`` is the
@@ -57,13 +58,15 @@ class Settings(BaseSettings):
     queue_backend: Literal["memory", "qstash"] = "memory"
 
     # --- Supabase ---
+    # All env-only; no dev fallback (8.3a). Local values come from .env (.env.example).
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/freight"
+    database_url: str = ""
 
     # --- Redis (Upstash) ---
-    redis_url: str = "redis://localhost:6379/0"
+    # Env-only; no localhost fallback (8.3a). Set in .env for local dev.
+    redis_url: str = ""
 
     # --- Rate engine ---
     fuel_surcharge_delta_cents: int = 1000  # added to each lane per surcharge run
@@ -91,9 +94,10 @@ class Settings(BaseSettings):
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
     gmail_refresh_token: str = ""
-    gmail_redirect_uri: str = Field(
-        default="http://localhost:8000/auth/gmail/callback"
-    )
+    # Env-only; no localhost fallback (8.3a). Unused at runtime (the single-inbox
+    # refresh token was obtained out-of-band), so empty is harmless. Set in .env if
+    # the OAuth consent flow is ever re-run locally.
+    gmail_redirect_uri: str = ""
 
     def cors_origins_list(self) -> list[str]:
         """The allowed browser origins as a clean list (comma-separated env value).
