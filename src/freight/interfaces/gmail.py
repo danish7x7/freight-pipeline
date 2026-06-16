@@ -17,6 +17,14 @@ class GmailClient(Protocol):
 
     def get_message(self, message_id: str) -> InboundMessage: ...
 
+    def get_rfc_message_id(self, message_id: str) -> str | None:
+        """Return the message's RFC ``Message-ID`` header (``<...@...>``), or None.
+
+        Needed for recipient-side reply threading (In-Reply-To/References). Distinct
+        from ``message_id`` (Gmail's API id). Best-effort: callers must tolerate None.
+        """
+        ...
+
     def send(self, message: OutboundMessage) -> str:
         """Send ``message`` and return the provider message id."""
         ...

@@ -1,6 +1,44 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-16 — Reply threading: recipient-side needs RFC headers, not threadId
+**The bug.** Quote replies started a NEW conversation in the recipient's inbox.
+`send_quote` fed `_to_raw` the **Gmail API id** (`email.gmail_message_id`) as
+`in_reply_to`, and set **no `threadId`**. `_to_raw`'s plumbing was already correct (it
+sets BOTH `In-Reply-To` and `References` from `in_reply_to`) — it was just fed the wrong
+value.
+
+**The rule (recorded so it isn't re-litigated).** Recipient-side threading is driven by
+the RFC **`In-Reply-To` + `References`** headers pointing at the prior message's **RFC
+`Message-ID`** (`<...@mail.gmail.com>`). It is NOT driven by Gmail's `threadId` (that only
+threads SENDER-side, in our own Sent view) and NOT by **subject match alone** — tying to
+the order-id-in-subject case: a matching `Re: <subject>` is insufficient; Google requires
+the `References`/`In-Reply-To` header to point at the prior `Message-ID`. All three
+together (RFC headers + threadId + matching subject) is the belt-and-suspenders form.
+
+**The fix.** (1) `OutboundMessage` gains `thread_id`; `GmailApiClient.send` sets `threadId`
+on the send body when present (sender-side). (2) New `GmailClient.get_rfc_message_id` fetches
+the inbound RFC `Message-ID` at send time via `messages.get(format="metadata",
+metadataHeaders=["Message-Id"])`. (3) `send_quote` sets `in_reply_to=<RFC Message-ID>`
+(drives both headers) + `thread_id=email.thread_id`.
+
+**Fetch-at-send, not capture-at-ingest.** Chosen so it works for the deal ALREADY in the
+queue with no migration and no re-ingest (+1 cheap Gmail read per human-triggered send).
+Capture-at-ingest (new `InboundMessage` field + column + migration) was rejected — more
+surface and wouldn't fix the queued deal.
+
+**Best-effort / non-blocking — the key property.** The RFC fetch is wrapped in `send_quote`:
+a `None` return OR any exception degrades to an **unthreaded send that still completes** —
+threading is additive on top of a send that must work, never a new hard dependency in the
+send critical path. The human gate, `UNIQUE(quote_id)` claim, audit dual-write, and
+at-least-once semantics are untouched (purely MIME/threading fields).
+
+**Tested.** Happy path: the `OutboundMessage` carries `in_reply_to == "<gid@mail.gmail.com>"`
+(the RFC id, NOT the API id) + `thread_id` from the inbound row. Degraded path: fetch
+returns None AND fetch raises → send still completes with `in_reply_to=None`. Client-level:
+`_to_raw` emits BOTH `In-Reply-To` and `References` (omits both when absent); `send` sets
+`threadId` when present and omits it otherwise. Gates: ruff + mypy clean, pytest 254.
+
 ## 2026-06-15 — Phase 8.3b: pooler prepared-statement fix + live e2e progress
 **The fix (applied, was held).** `make_engine` now passes
 `connect_args={"prepare_threshold": None}` to `create_engine`, disabling psycopg3

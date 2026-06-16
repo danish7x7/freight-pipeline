@@ -33,7 +33,14 @@ class OutboundMessage(BaseModel):
     to: str
     subject: str
     body: str
+    # The inbound RFC Message-ID (``<...@mail.gmail.com>``). Drives BOTH In-Reply-To and
+    # References — the headers that thread the reply for the RECIPIENT. None => those
+    # headers are omitted (graceful degradation; the send still goes out, unthreaded).
     in_reply_to: str | None = None
+    # The inbound Gmail thread id — sets ``threadId`` on the send for SENDER-side
+    # threading. None => omit threadId. (Sender-side only; recipients thread on the
+    # RFC headers above, never on threadId. See DECISIONS.)
+    thread_id: str | None = None
     # Custom MIME headers, e.g. X-Freight-Quote-Id — a marker for future send dedup
     # (closing the at-least-once double-send window; see DECISIONS).
     headers: dict[str, str] = Field(default_factory=dict)

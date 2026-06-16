@@ -27,6 +27,10 @@ class MockGmailClient:
                 return message
         raise KeyError(f"no message with id {message_id!r}")
 
+    def get_rfc_message_id(self, message_id: str) -> str | None:
+        """A synthetic RFC Message-ID derived from the API id (mirrors Gmail's form)."""
+        return f"<{message_id}@mail.gmail.com>"
+
     def send(self, message: OutboundMessage) -> str:
         self.sent.append(message)
         return f"mock-sent-{len(self.sent):04d}"

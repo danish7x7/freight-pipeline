@@ -34,8 +34,9 @@ class _FakeMessages:
     def list(self, userId: str, **_kwargs: object) -> _Exec:  # noqa: N803
         return _Exec(self._listing)
 
-    def get(self, userId: str, id: str, format: str | None = None) -> _Exec:  # noqa: N803
-        return _Exec(self._by_id[id])
+    def get(self, **kwargs: object) -> _Exec:
+        # All Gmail get kwargs (userId/id/format/metadataHeaders) arrive by keyword.
+        return _Exec(self._by_id[str(kwargs["id"])])
 
     def send(self, userId: str, body: dict[str, str]) -> _Exec:  # noqa: N803
         self.sent_bodies.append(body)
@@ -135,8 +136,56 @@ def test_send_builds_mime_and_returns_id() -> None:
     assert "To: a@b.c" in decoded
     assert "Subject: re: rate" in decoded
     assert "In-Reply-To: orig-1" in decoded
+    assert "References: orig-1" in decoded  # both headers thread recipient-side
     assert "X-Freight-Quote-Id: quote-9" in decoded  # dedup marker present
     assert "Here is your quote." in decoded
+
+
+def test_get_rfc_message_id_reads_header() -> None:
+    raw = {
+        "id": "m1",
+        "payload": {
+            "headers": [
+                {"name": "Message-ID", "value": "<CABc123@mail.gmail.com>"},
+                {"name": "From", "value": "x@y.z"},
+            ]
+        },
+    }
+    client = GmailApiClient(_FakeService(_FakeMessages({"messages": []}, {"m1": raw})))
+    assert client.get_rfc_message_id("m1") == "<CABc123@mail.gmail.com>"
+
+
+def test_get_rfc_message_id_none_when_absent() -> None:
+    raw = {"id": "m2", "payload": {"headers": [{"name": "From", "value": "x@y.z"}]}}
+    client = GmailApiClient(_FakeService(_FakeMessages({"messages": []}, {"m2": raw})))
+    assert client.get_rfc_message_id("m2") is None
+
+
+def test_send_sets_threadid_and_both_reply_headers_when_present() -> None:
+    messages = _FakeMessages({"messages": []}, {})
+    client = GmailApiClient(_FakeService(messages))
+    client.send(
+        OutboundMessage(
+            to="a@b.c", subject="re", body="x",
+            in_reply_to="<r@mail.gmail.com>", thread_id="thread-9",
+        )
+    )
+    body = messages.sent_bodies[0]
+    assert body["threadId"] == "thread-9"  # sender-side threading
+    decoded = base64.urlsafe_b64decode(body["raw"] + "===").decode()
+    assert "In-Reply-To: <r@mail.gmail.com>" in decoded
+    assert "References: <r@mail.gmail.com>" in decoded
+
+
+def test_send_omits_threadid_and_reply_headers_when_absent() -> None:
+    messages = _FakeMessages({"messages": []}, {})
+    client = GmailApiClient(_FakeService(messages))
+    client.send(OutboundMessage(to="a@b.c", subject="re", body="x"))  # neither set
+    body = messages.sent_bodies[0]
+    assert "threadId" not in body
+    decoded = base64.urlsafe_b64decode(body["raw"] + "===").decode()
+    assert "In-Reply-To:" not in decoded
+    assert "References:" not in decoded
 
 
 def test_build_gmail_client_constructs_real_client() -> None:

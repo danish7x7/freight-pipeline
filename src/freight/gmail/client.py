@@ -114,11 +114,35 @@ class GmailApiClient:
         )
         return _to_inbound(raw)
 
+    def get_rfc_message_id(self, message_id: str) -> str | None:
+        """The RFC ``Message-ID`` header for reply threading, or None if absent."""
+        raw = (
+            self._service.users()
+            .messages()
+            .get(
+                userId=self._user_id,
+                id=message_id,
+                format="metadata",
+                metadataHeaders=["Message-Id"],
+            )
+            .execute()
+        )
+        headers = {
+            h["name"].lower(): h["value"]
+            for h in raw.get("payload", {}).get("headers", [])
+        }
+        return headers.get("message-id")
+
     def send(self, message: OutboundMessage) -> str:
+        body: dict[str, Any] = {"raw": _to_raw(message)}
+        if message.thread_id:
+            # threadId threads the reply SENDER-side (recipients thread on the RFC
+            # In-Reply-To/References headers in _to_raw). See DECISIONS.
+            body["threadId"] = message.thread_id
         result = (
             self._service.users()
             .messages()
-            .send(userId=self._user_id, body={"raw": _to_raw(message)})
+            .send(userId=self._user_id, body=body)
             .execute()
         )
         return str(result["id"])

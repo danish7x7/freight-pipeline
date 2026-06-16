@@ -94,12 +94,12 @@ def _setup(
         )
         conn.execute(
             text(
-                "insert into email_messages (id, gmail_message_id, deal_id, sender,"
-                " subject, received_at, ingest_status) values"
-                " (gen_random_uuid(), :g, :d, 'broker@example.com', 'Rate request',"
+                "insert into email_messages (id, gmail_message_id, thread_id, deal_id,"
+                " sender, subject, received_at, ingest_status) values"
+                " (gen_random_uuid(), :g, :t, :d, 'broker@example.com', 'Rate request',"
                 " now(), 'processed')"
             ),
-            {"g": gid, "d": deal_id},
+            {"g": gid, "t": f"test-thread-{deal_id}", "d": deal_id},
         )
     deal_ids.append(deal_id)
     quote_ids.append(quote_id)
@@ -132,6 +132,64 @@ def test_send_once_marks_sent_and_audits(
     assert status == "sent"
     assert gid == "mock-sent-0001"
     assert {"email.send.claimed", "email.sent"} <= actions
+
+
+class _NoMsgIdGmail(MockGmailClient):
+    """Fetch returns None (header absent) — threading degrades, send still completes."""
+
+    def get_rfc_message_id(self, message_id: str) -> str | None:
+        return None
+
+
+class _RaisingMsgIdGmail(MockGmailClient):
+    """Fetch raises — best-effort: caught → None, send must still complete."""
+
+    def get_rfc_message_id(self, message_id: str) -> str | None:
+        raise RuntimeError("gmail metadata fetch failed")
+
+
+def test_send_sets_threading_fields_from_inbound(
+    env: tuple[Engine, IngestRepository, list[str], list[str]],
+) -> None:
+    engine, repo, q, d = env
+    quote_id, deal_id = _setup(engine, repo, q, d, reviewer_uid=REVIEWER1.uid)
+    with engine.connect() as conn:
+        gid, thread_id = conn.execute(
+            text(
+                "select gmail_message_id, thread_id from email_messages"
+                " where deal_id = :d"
+            ),
+            {"d": deal_id},
+        ).one()
+    gmail = MockGmailClient()
+
+    send_quote(repo, gmail, reviewer=REVIEWER1, quote_id=quote_id, body="$950")
+
+    sent = gmail.sent[0]
+    # Recipient-side threading: In-Reply-To/References = the inbound RFC Message-ID,
+    # NOT the Gmail API id (the bug we fixed).
+    assert sent.in_reply_to == f"<{gid}@mail.gmail.com>"
+    assert sent.in_reply_to != gid
+    assert sent.thread_id == thread_id  # sender-side threading
+
+
+def test_send_degrades_to_unthreaded_when_rfc_id_unavailable(
+    env: tuple[Engine, IngestRepository, list[str], list[str]],
+) -> None:
+    engine, repo, q, d = env
+    # (a) fetch returns None → send completes, no In-Reply-To/References.
+    quote_a, _ = _setup(engine, repo, q, d, reviewer_uid=REVIEWER1.uid)
+    g_none = _NoMsgIdGmail()
+    send_quote(repo, g_none, reviewer=REVIEWER1, quote_id=quote_a, body="x")
+    assert len(g_none.sent) == 1  # send still completed
+    assert g_none.sent[0].in_reply_to is None
+
+    # (b) fetch raises → caught (best-effort) → None, send still completes.
+    quote_b, _ = _setup(engine, repo, q, d, reviewer_uid=REVIEWER1.uid)
+    g_raise = _RaisingMsgIdGmail()
+    send_quote(repo, g_raise, reviewer=REVIEWER1, quote_id=quote_b, body="x")
+    assert len(g_raise.sent) == 1  # never blocked the send
+    assert g_raise.sent[0].in_reply_to is None
 
 
 def test_duplicate_send_is_409_no_double_send(

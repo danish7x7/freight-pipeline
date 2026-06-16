@@ -123,6 +123,17 @@ def send_quote(
                 detail={"quote_id": quote_id},
             )
 
+        # Best-effort: fetch the inbound RFC Message-ID so the reply threads recipient-
+        # side (In-Reply-To/References). Threading is ADDITIVE — a fetch failure must
+        # NOT block the send, so degrade to None and send unthreaded. (The old bug fed
+        # the Gmail API id here; recipients need the RFC header.) Does not touch the
+        # claim/audit/at-least-once path.
+        try:
+            rfc_message_id = gmail.get_rfc_message_id(email.gmail_message_id)
+        except Exception as exc:
+            logger.warning("get_rfc_message_id failed; sending unthreaded: %s", exc)
+            rfc_message_id = None
+
         # Gmail send AFTER the claim commits (failure → 502, claim stays recoverable).
         try:
             gmail_message_id = gmail.send(
@@ -130,7 +141,8 @@ def send_quote(
                     to=email.sender,
                     subject=subject,
                     body=body,
-                    in_reply_to=email.gmail_message_id,
+                    in_reply_to=rfc_message_id,  # => In-Reply-To/References (recipient)
+                    thread_id=email.thread_id,  # => threadId (sender-side)
                     # Marker for future send dedup (the at-least-once window). A retry
                     # can later check the mailbox for this marker before re-sending.
                     headers={"X-Freight-Quote-Id": quote_id},

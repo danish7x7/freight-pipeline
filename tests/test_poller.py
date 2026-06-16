@@ -141,6 +141,9 @@ class _FailingGmail:
     def get_message(self, message_id: str) -> InboundMessage:
         raise NotImplementedError
 
+    def get_rfc_message_id(self, message_id: str) -> str | None:
+        raise NotImplementedError
+
     def send(self, message: OutboundMessage) -> str:
         raise NotImplementedError
 
