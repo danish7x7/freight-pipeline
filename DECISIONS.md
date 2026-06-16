@@ -1,6 +1,28 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-16 — Console review queue empty: PGRST201 ambiguous embed (NOT auth)
+**Bug.** The console showed "No drafts awaiting review" for an admin while `state=quoted`
+unsent deals existed. NOT auth/RLS — the admin identity row and the admins-see-all policy were
+confirmed correct (8.1; `auth.uid()==app uid`, role admin). The browser's
+`/rest/v1/deals?select=...&state=eq.quoted` read returned **300 Multiple Choices / PGRST201**:
+PostgREST found TWO FK paths between `deals` and `quotes` — `quotes.deal_id → deals` AND
+`deals.accepted_quote_id → quotes` (the latter added in migration 8) — and refused to embed
+`quotes(...)` ambiguously. The read errored at parse time; RLS/auth never even ran.
+
+**Fix.** Disambiguate the embed by FK constraint name: **`quotes!quotes_deal_id_fkey(...)`** (the
+deal's quotes via `quotes.deal_id`, not the accepted-quote forward path). `email_messages` has a
+single FK (`email_messages_deal_id_fkey`) so it stays unqualified. Applied in BOTH
+`web/app/review/page.tsx` and `web/app/review/[dealId]/page.tsx` (identical SELECT). Constraint
+names verified against the live-equivalent schema (`pg_constraint`), not assumed.
+
+**Lesson (the real cost).** `review/page.tsx` discarded the query `error`
+(`const { data } = ...`), so a 300/PGRST201 rendered **identically to an empty queue** and cost
+~an hour to localize. Both pages now log the query `error`. Always surface PostgREST errors — a
+swallowed error makes a hard failure look like benign-empty. Same class as the 8.3a
+silent-fallback removals. (Possible follow-up, not done: the SELECT is duplicated across the two
+pages — a shared const would stop the two copies drifting.)
+
 ## 2026-06-16 — CARRY-FORWARD (Phase 9 / Phase 10): computed rate is NOT route-sensitive
 **Finding (diagnostic only — not fixed now).** The computed-rate fallback
 (`src/freight/rates/formula.py` `compute_rate`) is **route-blind**: it reads only
