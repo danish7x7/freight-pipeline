@@ -348,12 +348,25 @@ class LaneRate(BaseModel):
 
 
 def make_engine(database_url: str) -> Engine:
-    """Build a sync Engine, normalizing the URL to the psycopg (v3) driver."""
+    """Build a sync Engine, normalizing the URL to the psycopg (v3) driver.
+
+    ``prepare_threshold=None`` DISABLES psycopg3 server-side prepared statements. The
+    Supabase transaction pooler (pgbouncer, transaction mode) rotates the backend
+    connection between statements, so a prepared statement made on one statement is
+    gone before the next runs and psycopg3's default raises ``InvalidSqlStatementName``.
+    This is the single engine factory for the whole app, so disabling it here covers
+    EVERY statement (claim_insert, finalize, send-claim, surcharge, readiness), not one.
+    Set via ``connect_args`` (a psycopg3 connect kwarg), NOT a URL param.
+    """
     if database_url.startswith("postgresql://"):
         database_url = database_url.replace(
             "postgresql://", "postgresql+psycopg://", 1
         )
-    return create_engine(database_url, pool_pre_ping=True)
+    return create_engine(
+        database_url,
+        pool_pre_ping=True,
+        connect_args={"prepare_threshold": None},
+    )
 
 
 class IngestRepository:

@@ -1,6 +1,48 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-15 — Phase 8.3b: pooler prepared-statement fix + live e2e progress
+**The fix (applied, was held).** `make_engine` now passes
+`connect_args={"prepare_threshold": None}` to `create_engine`, disabling psycopg3
+server-side prepared statements. **Root cause:** the Supabase **transaction pooler
+(pgbouncer, transaction mode)** rotates the backend connection between statements, so a
+prepared statement made on one statement is gone before the next runs; psycopg3's default
+(it auto-prepares after a few executions, naming them `_pg3_N`) then raised
+`psycopg.errors.InvalidSqlStatementName: prepared statement "_pg3_0" does not exist` at
+`claim_insert` (the `email_messages` INSERT). `/ready` had survived because its `SELECT 1`
+is trivial and never crossed psycopg3's auto-prepare threshold.
+
+**Covers EVERY statement, not one site.** Verified `create_engine` is called ONLY inside
+`make_engine`, and `make_engine` is the single factory for every engine in the app
+(claim_insert, finalize, send-claim, surcharge, review, readiness, metrics, auth). So the
+one connect_args change neutralizes the pooler exposure globally.
+
+**Set via connect_args, NOT a URL param — tied to the earlier `?pgbouncer=true` removal.**
+Same root cause as the operational removal of `?pgbouncer=true` from the Render
+`DATABASE_URL`: the transaction pooler. The documented, code-side fix is the psycopg3
+connect kwarg `prepare_threshold=None`, kept here (one factory) rather than smeared across
+URL params on every connection string. **Companion settings:** `pool_pre_ping=True` stays
+(recycles a pooled connection the pooler may have dropped); nothing else added — minimal,
+`prepare_threshold=None` is the documented fix. (Local tests run against a DIRECT Postgres,
+not the pooler, where this is harmless — full suite 248 still green.)
+
+**Live e2e progress (body path, proven up to finalize).** Gmail auth succeeded; the poller
+published 6 messages to QStash (201s); `/ingest` received them; the live
+Llama-3.3-70B extracted (1 `rate_request` = the order email, 5 `other`); the consumer
+processed. `/poll` 500'd ONLY on the prepared-statement error above — this fix unblocks the
+finalize write. Re-run the poll after redeploy to complete the gate (extract → validate →
+rate → review → human send).
+
+**Carry-forward (surfaced, NOT fixed here) — every email hits the live LLM.** By design,
+the single structured extraction call IS the intent classifier; there is no pre-LLM filter,
+so non-order mail (e.g. Google account notifications) also reaches the model and is
+classified `other`. That is correct/intended at this volume (right-sized for ~80/day; the
+6.4 LLM-call guard caps bursts). The efficiency opportunity — a cheap pre-LLM heuristic
+(sender allow/deny, skip known no-reply/notification senders) to avoid spending an LLM call
+on obvious non-freight mail — is logged for **Phase 9** (eval/load, where per-email LLM cost
+under volume is measured). Not fixed now: a filter risks dropping a legit order, and it's a
+tuning decision better made against measured numbers.
+
 ## 2026-06-15 — Phase 8.3b: Storage reader swap + QStash finding (PDF write path → 8.3c)
 Scope: replace the Storage placeholder's READ side + verify the live QStash delivery path +
 run the body-path cloud e2e. The PDF write path is split out to 8.3c (below).
