@@ -2,12 +2,28 @@ import { getSupabase } from "./supabase";
 
 // The backend is the ONLY thing that sends/rejects. Calls carry the Supabase JWT;
 // the backend verifies it (who → audit actor; is-it-their-deal → authz).
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+//
+// Fail loudly if the backend URL is unconfigured rather than silently defaulting to
+// localhost: NEXT_PUBLIC_* is baked at build, so a missing var would otherwise ship a
+// broken bundle that quietly calls localhost. Lazy (mirrors lib/supabase.ts) so it
+// never throws during build/prerender — only at call time. Local dev sets it in
+// web/.env.local.
+function apiBase(): string {
+  const base = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (!base) {
+    throw new Error(
+      "NEXT_PUBLIC_API_BASE_URL is not set — the console cannot reach the backend. " +
+        "Set it (e.g. https://freight-pipeline.onrender.com) in Vercel env, or " +
+        "http://localhost:8000 in web/.env.local for local dev.",
+    );
+  }
+  return base;
+}
 
 async function authedPost(path: string, body: unknown): Promise<Record<string, string>> {
   const { data } = await getSupabase().auth.getSession();
   const token = data.session?.access_token ?? "";
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${apiBase()}${path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
