@@ -14,6 +14,7 @@ from freight.extraction.confidence import (
 from freight.extraction.pipeline import ExtractionOutcome, extract
 from freight.extraction.prompts import build_extraction_prompt
 from freight.extraction.schema import (
+    Accessorial,
     Equipment,
     Intent,
     RawExtraction,
@@ -23,6 +24,7 @@ from freight.extraction.validation import ValidationFailure, validate
 
 __all__ = [
     "REVIEW_THRESHOLD",
+    "Accessorial",
     "ConfidenceOutcome",
     "Equipment",
     "ExtractionOutcome",

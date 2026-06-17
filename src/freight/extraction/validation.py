@@ -11,8 +11,10 @@ No LLM output reaches this module's output except as a value that survived the g
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from freight.extraction.schema import (
+    Accessorial,
     Equipment,
     Intent,
     RawExtraction,
@@ -49,6 +51,11 @@ _CITY_RE = re.compile(r"^[A-Za-z .,'\-]{1,64}$")
 _EQUIPMENT_RE = re.compile(r"^[A-Za-z0-9 '\"._-]{1,32}$")
 # Weight: digits with optional commas and an optional lbs suffix — nothing else.
 _WEIGHT_RE = re.compile(r"^([\d,]+)\s*(lbs?\.?)?$")
+# Accessorial element: bounded, name-like (same posture as equipment). Each element is
+# format-gated BEFORE any synonym canonicalization (allowlist-then-canon), so an element
+# carrying a newline / injection punctuation is rejected, never canonicalized down.
+_ACCESSORIAL_RE = re.compile(r"^[A-Za-z0-9 '\"._-]{1,32}$")
+_MAX_ACCESSORIALS = 8  # cap list length so a payload can't stuff thousands of entries
 
 _MIN_WEIGHT_LBS = 1
 _MAX_WEIGHT_LBS = 80_000  # legal gross max ballpark; reject above as implausible
@@ -72,6 +79,7 @@ def validate(raw: RawExtraction) -> ValidatedExtraction | ValidationFailure:
     equipment = _validate_equipment(raw.equipment, reasons)
     weight = _validate_weight(raw.weight_lbs, reasons)
     mc_number = _validate_mc(raw.mc_number)
+    accessorials = _validate_accessorials(raw.accessorials, reasons)
 
     if reasons or intent is None:
         return ValidationFailure(reasons=reasons)
@@ -84,6 +92,7 @@ def validate(raw: RawExtraction) -> ValidatedExtraction | ValidationFailure:
         equipment=equipment,
         weight_lbs=weight,
         mc_number=mc_number,
+        accessorials=accessorials,
     )
 
 
@@ -150,6 +159,55 @@ def _canon_equipment(key: str) -> Equipment | None:
         return "container"
     if "van" in key or "dry" in key:
         return "dry_van"
+    return None
+
+
+def _validate_accessorials(
+    value: list[Any] | None, reasons: list[str]
+) -> list[Accessorial] | None:
+    """Allowlist-reject a list of accessorial TYPES; canonicalize known-good.
+
+    Each ELEMENT is untrusted: format-gate (reject newline/injection/over-length) BEFORE
+    synonym canonicalization, allowlist-then-canon. The list length is capped. Any bad
+    element appends a per-element ``invalid_accessorial`` reason (→ needs_review); the
+    amount is never taken from the email — only the validated type is.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        reasons.append(f"invalid_accessorials:{value!r}")
+        return None
+    if len(value) > _MAX_ACCESSORIALS:
+        reasons.append(f"too_many_accessorials:{len(value)}")
+        return None
+    result: list[Accessorial] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            reasons.append(f"invalid_accessorial:{item!r}")
+            continue
+        stripped = item.strip()
+        if not _ACCESSORIAL_RE.match(stripped):
+            reasons.append(f"invalid_accessorial:{item!r}")
+            continue
+        canon = _canon_accessorial(stripped.lower())
+        if canon is None:
+            reasons.append(f"invalid_accessorial:{item!r}")
+            continue
+        if canon not in result:
+            result.append(canon)
+    return result
+
+
+def _canon_accessorial(key: str) -> Accessorial | None:
+    # Keyword canonicalization over an already format-gated value.
+    if "detention" in key or "detain" in key:
+        return "detention"
+    if "liftgate" in key or "lift gate" in key or "lift-gate" in key:
+        return "liftgate"
+    if "appointment" in key or "appt" in key:
+        return "appointment"
+    if "chassis" in key:
+        return "chassis"
     return None
 
 

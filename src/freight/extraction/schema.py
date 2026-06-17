@@ -1,10 +1,13 @@
 """Extraction schemas: the permissive LLM target and the canonical validated output."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 Intent = Literal["rate_request", "negotiation", "rc", "contract", "other"]
+# Closed allowlist of accessorial TYPES the engine prices. The LLM flags which apply;
+# the per-type amount comes from the pricing_components row, never the model.
+Accessorial = Literal["detention", "liftgate", "appointment", "chassis"]
 Equipment = Literal[
     "dry_van", "reefer", "flatbed", "step_deck", "power_only", "container", "other"
 ]
@@ -28,6 +31,9 @@ class RawExtraction(BaseModel):
     equipment: str | None = None
     weight_lbs: str | int | None = None
     mc_number: str | None = None
+    # Loose (list[Any]) on purpose: a malformed ELEMENT must reach the deterministic
+    # gate to be rejected per-element, not crash parsing. Each element is untrusted.
+    accessorials: list[Any] | None = None
 
 
 class ValidatedExtraction(BaseModel):
@@ -46,3 +52,5 @@ class ValidatedExtraction(BaseModel):
     equipment: Equipment | None = None
     weight_lbs: int | None = None
     mc_number: str | None = None
+    # Canonical accessorial types that survived the gate (None = absent; [] = none).
+    accessorials: list[Accessorial] | None = None
