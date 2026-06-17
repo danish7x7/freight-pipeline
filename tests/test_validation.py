@@ -46,6 +46,10 @@ def test_equipment_synonyms_canonicalize() -> None:
         ("step deck", "step_deck"),
         ("power only", "power_only"),
         ("dryvan", "dry_van"),
+        ("container", "container"),
+        ("40' container", "container"),
+        ("drayage", "container"),
+        ("intermodal", "container"),
     ]:
         result = validate(RawExtraction(intent="rate_request", equipment=raw_equipment))
         assert isinstance(result, ValidatedExtraction)

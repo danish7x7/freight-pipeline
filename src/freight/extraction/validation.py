@@ -146,6 +146,8 @@ def _canon_equipment(key: str) -> Equipment | None:
         return "step_deck"
     if "power" in key:
         return "power_only"
+    if "container" in key or "dray" in key or "intermodal" in key:
+        return "container"
     if "van" in key or "dry" in key:
         return "dry_van"
     return None

@@ -129,7 +129,7 @@ carriers = Table(
 )
 
 _EQUIPMENT_TYPE = SAEnum(
-    "dry_van", "reefer", "flatbed", "step_deck", "power_only", "other",
+    "dry_van", "reefer", "flatbed", "step_deck", "power_only", "container", "other",
     name="equipment_type", create_type=False,
 )
 _RATE_SOURCE = SAEnum(

@@ -5,7 +5,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 Intent = Literal["rate_request", "negotiation", "rc", "contract", "other"]
-Equipment = Literal["dry_van", "reefer", "flatbed", "step_deck", "power_only", "other"]
+Equipment = Literal[
+    "dry_van", "reefer", "flatbed", "step_deck", "power_only", "container", "other"
+]
 
 
 class RawExtraction(BaseModel):
