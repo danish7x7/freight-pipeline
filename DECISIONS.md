@@ -1,6 +1,59 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-16 — Review queue hides sent deals + shared review SELECT const
+**Bug (presentation-correctness, not safety).** The review-queue query filtered on
+`state='quoted'` ONLY. Per the locked Phase 5 semantic, a deal STAYS `'quoted'` after a
+send — the `sends` row is the send signal, deal state is coarse (`'quoted'` = a quote was
+produced, not necessarily sent). So already-sent deals kept showing as pending. Idempotency
+already holds (`UNIQUE(quote_id)` → 409 on re-send), so this was a stale-view bug, not a
+double-send risk. The Phase 5 "review queue = 'quoted' deals with no sends row" semantic was
+recorded but never ENFORCED in the query; this enforces it. (Resolved upfront, NOT
+re-litigated: no new `'sent'` deal state / no `quote_sent` transition / no Phase 4 finalize
+change — the fix is purely the review query.)
+
+**Schema verified, not assumed (same discipline as the PGRST201 fix).** `pg_constraint`
+against the live-equivalent local DB: `sends.quote_id → quotes` = **`sends_quote_id_fkey`**
+(and it is **UNIQUE**), `sends.deal_id → deals` = `sends_deal_id_fkey`. The query reaches
+`sends` by nesting it under the deal's-quotes embed: `quotes!quotes_deal_id_fkey(...,
+sends(status))` — one FK path from quotes→sends, so unambiguous (no PGRST201). Confirmed
+live: the nested SELECT returns 200, not 300.
+
+**Shape gotcha caught by live test, NOT by types.** Because `sends.quote_id` is UNIQUE,
+PostgREST embeds quotes→sends as one-to-**ONE**: `sends` comes back as an **object-or-null**,
+NOT an array (no send → `null`; sent → `{"status":"sent"}`). The first cut typed it
+`SendRow[]` with `.some()` — which type-checks but throws `null.some` at runtime. Hitting the
+live REST endpoint surfaced the `null`/object shape before commit; type is now
+`SendRow | null`, filter is `q.sends?.status === "sent"`. Lesson: a UNIQUE FK flips a
+PostgREST embed from array to object — verify the wire shape, don't infer it.
+
+**Filter is client-side at the call site.** A deal is hidden when any of its quotes has a
+send with `status='sent'`. Applied in JS on the list page (PostgREST has no clean
+negative-existence/anti-join filter; the review queue is small — right-sized). The detail
+page (`.single()` by id) shares the SELECT but applies NO filter.
+
+**Claimed-vs-sent display choice: only `'sent'` HIDES.** A `'claimed'`-but-not-`'sent'` row
+(a crash between claim and send — the at-least-once window, RECOVERY.md §4) and a `'failed'`
+row both stay VISIBLE to the reviewer. Rationale: those are exactly the rows a human must
+SEE to recover; hiding a stuck/failed send would bury the problem. Only a confirmed `'sent'`
+removes the deal from the queue.
+
+**Shared SELECT const (drift fix flagged in the PGRST201 work).** The identical SELECT/embed
+was duplicated across `review/page.tsx` and `review/[dealId]/page.tsx` — two copies that
+could drift (and one already had after the PGRST201 edit). Extracted to a single
+`REVIEW_SELECT` in `web/lib/types.ts` (next to `DealRow`, so the query string and the type
+that decodes it live together) and imported in both pages. The list/detail difference is the
+WHERE clause (`state=eq.quoted` + client filter vs `id=eq.{id}.single()`), applied at the
+call site — the SELECT shape itself stays shared, never forked.
+
+**Error surfacing preserved.** Both pages keep the `if (error) console.error(...)` from the
+PGRST201 fix — no error-swallowing reintroduced.
+
+**Gates:** ruff/mypy N/A (frontend-only). `npm run lint` 0, `npx tsc --noEmit` 0,
+`npm run build` 0. Functional (live local DB, `state=quoted` deal d2222222): SENT send →
+hidden; CLAIMED (stuck) send → visible; no send → visible. Test send rows cleaned up (0
+remain).
+
 ## 2026-06-16 — Console review queue empty: PGRST201 ambiguous embed (NOT auth)
 **Bug.** The console showed "No drafts awaiting review" for an admin while `state=quoted`
 unsent deals existed. NOT auth/RLS — the admin identity row and the admins-see-all policy were

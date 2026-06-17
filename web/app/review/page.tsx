@@ -5,16 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
 import { Card } from "@/components/ui";
-import { type DealRow, dollars, lane } from "@/lib/types";
-
-// `deals` has TWO FK paths to `quotes` (quotes.deal_id and deals.accepted_quote_id), so
-// the embed must name the constraint or PostgREST refuses it (PGRST201, 300 Multiple
-// Choices). We want the deal's quotes via quotes.deal_id. email_messages has one FK, so
-// it needs no hint.
-const SELECT =
-  "id, origin_city, origin_state, dest_city, dest_state, equipment," +
-  " quotes!quotes_deal_id_fkey(id, amount_cents, currency, is_computed)," +
-  " email_messages(sender, subject, body, confidence)";
+import { type DealRow, dollars, lane, REVIEW_SELECT } from "@/lib/types";
 
 export default function ReviewQueue() {
   const router = useRouter();
@@ -35,11 +26,18 @@ export default function ReviewQueue() {
       // RLS scopes deals to the signed-in reviewer (or all, for admin).
       const { data, error } = await getSupabase()
         .from("deals")
-        .select(SELECT)
+        .select(REVIEW_SELECT)
         .eq("state", "quoted");
       // Surface query errors — a swallowed PGRST201 once looked like an empty queue.
       if (error) console.error("review queue query failed:", error);
-      setDeals((data as unknown as DealRow[] | null) ?? []);
+      // Deal state stays 'quoted' after a send; the 'sent' sends row is the send signal
+      // (Phase 5: review queue = 'quoted' deals with no completed send). Hide deals whose
+      // quote has already been sent. A 'claimed' (stuck, RECOVERY.md §4) or 'failed' send
+      // stays VISIBLE — those need a reviewer's eyes, not hiding.
+      const pending = ((data as unknown as DealRow[] | null) ?? []).filter(
+        (d) => !d.quotes.some((q) => q.sends?.status === "sent"),
+      );
+      setDeals(pending);
       setLoading(false);
     })();
   }, [router]);
