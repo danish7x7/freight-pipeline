@@ -44,6 +44,10 @@ def env() -> Iterator[tuple[Engine, IngestRepository, list[str]]]:
         with engine.begin() as conn:
             if deal_ids:
                 conn.execute(
+                    text("delete from quote_components where deal_id = any(:ids)"),
+                    {"ids": deal_ids},
+                )
+                conn.execute(
                     text("delete from quotes where deal_id = any(:ids)"),
                     {"ids": deal_ids},
                 )
@@ -209,3 +213,120 @@ def test_non_rate_request_routes_to_review_without_deal(
             {"g": gid},
         ).scalar_one()
     assert reason == "intent_not_yet_routable"
+
+
+def _review_reason(engine: Engine, gid: str) -> str:
+    with engine.connect() as conn:
+        return str(
+            conn.execute(
+                text(
+                    "select review_reason from email_messages "
+                    "where gmail_message_id = :g"
+                ),
+                {"g": gid},
+            ).scalar_one()
+        )
+
+
+def test_off_table_lane_routes_to_review_without_deal(
+    env: tuple[Engine, IngestRepository, list[str]],
+) -> None:
+    # An on-table lane is required for a computed quote: off-table → review, no deal,
+    # no flat fallback.
+    engine, repo, _ = env
+    gid = f"{PREFIX}{uuid.uuid4()}"
+    _queued(repo, gid)
+    fields: dict[str, object] = {
+        "origin_city": "Nowhere", "origin_state": "ND",
+        "dest_city": "Elsewhere", "dest_state": "SD", "equipment": "dry_van",
+    }
+    with engine.begin() as conn:
+        result = finalize(
+            conn, repo, gmail_message_id=gid,
+            outcome=_outcome("rate_request", fields), contracted_rate=None,
+        )
+    assert result.deal_id is None
+    assert result.quote_id is None
+    assert repo.get_by_gmail_id(gid).ingest_status == "needs_review"  # type: ignore[union-attr]
+    assert _review_reason(engine, gid) == "lane_not_in_table"
+
+
+def test_unknown_equipment_routes_to_review_without_deal(
+    env: tuple[Engine, IngestRepository, list[str]],
+) -> None:
+    engine, repo, _ = env
+    gid = f"{PREFIX}{uuid.uuid4()}"
+    _queued(repo, gid)
+    fields = {**_CHI_DAL_FIELDS, "equipment": "other"}  # on-table lane, no model
+    with engine.begin() as conn:
+        result = finalize(
+            conn, repo, gmail_message_id=gid,
+            outcome=_outcome("rate_request", fields), contracted_rate=None,
+        )
+    assert result.deal_id is None
+    assert _review_reason(engine, gid) == "unknown_equipment_model"
+
+
+def test_container_finalizes_a_flat_drayage_quote(
+    env: tuple[Engine, IngestRepository, list[str]],
+) -> None:
+    # Rollback pattern: the computed quote materializes an append-only rates row that
+    # can't be deleted, so we never commit it.
+    engine, repo, _ = env
+    gid = f"{PREFIX}{uuid.uuid4()}"
+    _queued(repo, gid)
+    fields: dict[str, object] = {
+        "origin_city": "Newark", "origin_state": "NJ",
+        "dest_city": "Boston", "dest_state": "MA", "equipment": "container",
+    }
+    conn = engine.connect()
+    trans = conn.begin()
+    try:
+        result = finalize(
+            conn, repo, gmail_message_id=gid,
+            outcome=_outcome("rate_request", fields), contracted_rate=None,
+        )
+        assert result.deal_state == "quoted"
+        assert result.quote_id is not None
+        amount = conn.execute(
+            text("select amount_cents from quotes where id = :q"),
+            {"q": result.quote_id},
+        ).scalar_one()
+        assert amount == 54000  # $450 drayage base + $90 fsc, no miles
+        roles = conn.execute(
+            text("select role from quote_components where quote_id = :q"),
+            {"q": result.quote_id},
+        ).scalars().all()
+        assert set(roles) == {"drayage_base", "fuel_surcharge"}
+    finally:
+        trans.rollback()
+        conn.close()
+
+
+def test_finalize_threads_accessorials_into_pinned_lines(
+    env: tuple[Engine, IngestRepository, list[str]],
+) -> None:
+    engine, repo, _ = env
+    gid = f"{PREFIX}{uuid.uuid4()}"
+    _queued(repo, gid)
+    fields: dict[str, object] = {
+        "origin_city": "Atlanta", "origin_state": "GA",
+        "dest_city": "Miami", "dest_state": "FL", "equipment": "dry_van",
+        "accessorials": ["detention"],
+    }
+    conn = engine.connect()
+    trans = conn.begin()
+    try:
+        result = finalize(
+            conn, repo, gmail_message_id=gid,
+            outcome=_outcome("rate_request", fields), contracted_rate=None,
+        )
+        assert result.quote_id is not None
+        roles = conn.execute(
+            text("select role from quote_components where quote_id = :q"),
+            {"q": result.quote_id},
+        ).scalars().all()
+        assert "accessorial:detention" in set(roles)
+    finally:
+        trans.rollback()
+        conn.close()

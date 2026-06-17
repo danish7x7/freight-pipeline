@@ -20,6 +20,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    Integer,
     MetaData,
     String,
     Table,
@@ -135,6 +136,14 @@ _EQUIPMENT_TYPE = SAEnum(
 _RATE_SOURCE = SAEnum(
     "contracted", "computed", name="rate_source", create_type=False,
 )
+_PRICING_COMPONENT_TYPE = SAEnum(
+    "per_mile_cost", "margin", "fuel_surcharge", "deadhead", "drayage_base",
+    "accessorial", name="pricing_component_type", create_type=False,
+)
+_ACCESSORIAL_TYPE = SAEnum(
+    "detention", "liftgate", "appointment", "chassis",
+    name="accessorial_type", create_type=False,
+)
 
 rates = Table(
     "rates",
@@ -173,6 +182,41 @@ quotes = Table(
     Column("amount_cents", BigInteger, nullable=False),
     Column("currency", String, nullable=False),
     Column("is_computed", Boolean, nullable=False),
+)
+
+pricing_components = Table(
+    "pricing_components",
+    _metadata,
+    Column(
+        "id",
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    ),
+    Column("component_type", _PRICING_COMPONENT_TYPE, nullable=False),
+    Column("equipment", _EQUIPMENT_TYPE),
+    Column("accessorial_type", _ACCESSORIAL_TYPE),
+    Column("value_cents", BigInteger),
+    Column("value_bps", Integer),
+    Column("effective_from", DateTime(timezone=True), nullable=False),
+    Column("created_by", UUID(as_uuid=False)),
+    Column("created_at", DateTime(timezone=True)),
+)
+
+quote_components = Table(
+    "quote_components",
+    _metadata,
+    Column(
+        "id",
+        UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    ),
+    Column("quote_id", UUID(as_uuid=False), nullable=False),
+    Column("deal_id", UUID(as_uuid=False), nullable=False),
+    Column("pricing_component_id", UUID(as_uuid=False), nullable=False),
+    Column("role", String, nullable=False),
+    Column("line_amount_cents", BigInteger, nullable=False),
 )
 
 _DEAL_STATE = SAEnum(
@@ -301,6 +345,23 @@ class RateRecord(BaseModel):
     currency: str
     source: RateSource
     carrier_id: str | None
+    effective_from: datetime
+
+
+class PricingComponent(BaseModel):
+    """A persisted, effective-dated pricing input (the row a quote line pins).
+
+    ``value_cents`` (flats: per_mile_cost = cents/mile, drayage_base/accessorial = flat)
+    XOR ``value_bps`` (rate-of: margin, fuel_surcharge, deadhead) — exactly one is set,
+    enforced by the DB CHECK.
+    """
+
+    id: str
+    component_type: str
+    equipment: str | None
+    accessorial_type: str | None
+    value_cents: int | None
+    value_bps: int | None
     effective_from: datetime
 
 
@@ -658,6 +719,74 @@ class IngestRepository:
                 is_computed=is_computed,
             )
             .returning(quotes.c.id)
+        )
+        return str(conn.execute(stmt).scalar_one())
+
+    def current_pricing_component(
+        self,
+        conn: Connection,
+        component_type: str,
+        *,
+        equipment: str | None = None,
+        accessorial_type: str | None = None,
+    ) -> PricingComponent | None:
+        """Current effective-dated pricing component on the caller's tx, or None.
+
+        Greatest ``effective_from <= now()``, tiebreak ``created_at DESC`` — the same
+        Model-A selection as contracted rates. Reads on the caller's Connection so a
+        quote pins the version visible inside its own finalize transaction. equipment /
+        accessorial_type are matched exactly (NULL matches the policy-wide rows).
+        """
+        stmt = (
+            select(
+                pricing_components.c.id,
+                pricing_components.c.component_type,
+                pricing_components.c.equipment,
+                pricing_components.c.accessorial_type,
+                pricing_components.c.value_cents,
+                pricing_components.c.value_bps,
+                pricing_components.c.effective_from,
+            )
+            .where(
+                and_(
+                    pricing_components.c.component_type == component_type,
+                    pricing_components.c.equipment.is_not_distinct_from(equipment),
+                    pricing_components.c.accessorial_type.is_not_distinct_from(
+                        accessorial_type
+                    ),
+                    pricing_components.c.effective_from <= func.now(),
+                )
+            )
+            .order_by(
+                pricing_components.c.effective_from.desc(),
+                pricing_components.c.created_at.desc(),
+            )
+            .limit(1)
+        )
+        row = conn.execute(stmt).mappings().first()
+        return PricingComponent.model_validate(dict(row)) if row is not None else None
+
+    def insert_quote_component(
+        self,
+        conn: Connection,
+        *,
+        quote_id: str,
+        deal_id: str,
+        pricing_component_id: str,
+        role: str,
+        line_amount_cents: int,
+    ) -> str:
+        """Pin one priced line to a quote on the caller's tx; return its id."""
+        stmt = (
+            insert(quote_components)
+            .values(
+                quote_id=quote_id,
+                deal_id=deal_id,
+                pricing_component_id=pricing_component_id,
+                role=role,
+                line_amount_cents=line_amount_cents,
+            )
+            .returning(quote_components.c.id)
         )
         return str(conn.execute(stmt).scalar_one())
 

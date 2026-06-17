@@ -24,7 +24,7 @@ from freight.carriers import evaluate
 from freight.db.repository import IngestRepository, RateKey, RateRecord
 from freight.deals.state_machine import DealState, advance
 from freight.extraction import ExtractionOutcome
-from freight.rates import quote_for
+from freight.rates import assess_quotability, quote_for
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,30 @@ def finalize(
         )
         return FinalizeResult(won=won, deal_id=None, deal_state=None, quote_id=None)
 
-    # processed rate_request → claim, then create the deal in the SAME tx.
+    # processed rate_request. A computed quote needs an on-table lane + a known costing
+    # model: if there's no contracted rate AND the deal isn't quotable, route to
+    # needs_review (no deal) BEFORE the processed-claim — never a flat fallback.
+    extracted = outcome.extracted or {}
+    key = rate_key_from(extracted)
+    plan = None
+    if contracted_rate is None:
+        assessed = assess_quotability(key)
+        if isinstance(assessed, str):
+            won = repo.flip_if_queued(
+                conn,
+                gmail_message_id=gmail_message_id,
+                intent=outcome.intent,
+                confidence=outcome.confidence,
+                extracted=outcome.extracted,
+                status="needs_review",
+                review_reason=assessed,
+            )
+            return FinalizeResult(
+                won=won, deal_id=None, deal_state=None, quote_id=None
+            )
+        plan = assessed
+
+    # Quotable (contracted or computed): claim, then create the deal in the SAME tx.
     won = repo.flip_if_queued(
         conn,
         gmail_message_id=gmail_message_id,
@@ -95,7 +118,6 @@ def finalize(
     if not won:
         return FinalizeResult(won=False, deal_id=None, deal_state=None, quote_id=None)
 
-    extracted = outcome.extracted or {}
     deal_id = repo.create_deal(conn, state="new_enquiry", extracted=extracted)
     repo.link_email(conn, gmail_message_id=gmail_message_id, deal_id=deal_id)
 
@@ -109,12 +131,15 @@ def finalize(
             won=True, deal_id=deal_id, deal_state=held, quote_id=None
         )
 
+    accessorials = extracted.get("accessorials") or []
     quote = quote_for(
         conn,
         repo,
         deal_id=deal_id,
-        key=rate_key_from(extracted),
+        key=key,
         contracted_rate=contracted_rate,
+        plan=plan,
+        accessorials=accessorials,
     )
     quoted: DealState = advance("new_enquiry", "quote_sent")
     repo.advance_deal(conn, deal_id=deal_id, state=quoted)
