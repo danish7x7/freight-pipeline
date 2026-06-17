@@ -1,6 +1,87 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-17 — Real route-aware rate engine (flat $2,200 → lane-table × versioned components)
+**The flat→real transition (resolves the 2026-06-16 route-blind carry-forward).** Before:
+`compute_rate` was route-BLIND — `base_by_equipment + _FLAT_MILES(800) × _PER_MILE(150) +
+_FUEL(20000)`, so EVERY dry-van lane returned $2,200 regardless of distance (the Chicago→Dallas
+== San Jose→Dallas collision logged 2026-06-16). After: the computed path prices off REAL lane
+road miles × effective-dated `pricing_components`, switches costing model by equipment, adds a
+separate FSC line and flat accessorials, and PINS every input. Proven live, same equipment,
+different miles → different totals: **Chicago→Dallas (925 mi) = $2,517.48 vs Atlanta→Miami
+(665 mi) = $1,809.85**. The flat-rate bug is dead; `formula.py` was deleted. The contracted
+path is UNCHANGED (single pinned all-in `rate_id`); only the computed fallback was rebuilt.
+
+**Distance source = committed lane table; off-table → review; NO geopy (decided).** Road miles
+live in `src/freight/rates/lanes.py` (Chicago↔Dallas 925, Atlanta↔Miami 665, Newark↔Boston 225,
+reverse + case/whitespace-insensitive). Miles are geography (not versioned, not pinned), so a
+committed module — not a DB table — is right-sized. An off-table lane returns None →
+`assess_quotability` yields `lane_not_in_table` → needs_review. **No geodesic/circuity
+fallback:** a made-up distance would quietly quote off a guessed number and poison the Phase 9
+eval; since it would route to review anyway it only hands a human a misleading anchor. The
+lane function is the seam if a broader lane universe is ever needed.
+
+**Equipment is the model switch (already allowlist-validated). `other`/missing → review.**
+`container` (new enum value, migration 11, its OWN migration per the PG add-value-then-use tx
+rule) → flat DRAYAGE model (base + FSC + accessorials, no miles, no lane needed). Per-mile
+equipment (dry_van/reefer/flatbed/step_deck/power_only) → per-mile model (needs an on-table
+lane). Any other equipment incl. `other`/None → `unknown_equipment_model` → needs_review.
+**This is a deliberate safety-posture IMPROVEMENT, not a regression:** the old formula priced
+`other` off an equipment base; we now refuse to invent a costing model and send it to a human.
+
+**Deadhead modeling = Option B (percentage, route-sensitive).** Chosen over a flat deadhead
+fee to stay consistent with the route-awareness this task introduces: `effective_miles =
+road_miles × (1 + deadhead_bps/10_000)`, so deadhead scales with lane distance instead of being
+a flat pretend number. Stored as a `deadhead` `value_bps` component (12% seed). Per-mile math:
+linehaul = miles×per_mile_cost; deadhead = linehaul×deadhead_bps/10_000; subtotal = sum; margin
+and FSC each = subtotal×bps/10_000 (FSC a SEPARATE line); + flat accessorials. Integer cents
+(floor on bps) so the all-in total is exactly the sum of pinned lines (no rounding drift).
+
+**FSC gap finding + newly-wired component + deferred cron (point 6 as modified).** Finding:
+`/jobs/surcharge` does NOT maintain a consumable FSC value — it folds a delta into whole
+CONTRACTED lane amounts by re-versioning (`source='contracted'` only) and never touches the
+computed path; the old `_FUEL_SURCHARGE_CENTS` constant was disconnected. So FSC was NEWLY wired
+as a `fuel_surcharge` `value_bps` pricing_component (seeded in migration 12, pinned per quote).
+Per the approved modification, `run_surcharge_update`/the cron was NOT touched this task — the
+engine works off the seeded component regardless. **Carry-forward (own future task): extend
+`/jobs/surcharge` to also append new `fuel_surcharge` component versions** so the cron maintains
+the computed-model FSC; the existing contracted-lane re-versioning is left untouched.
+
+**Accessorials = closed allowlist of TYPES; LLM flags WHICH, never an amount; hardened
+per-element.** New untrusted `accessorials` field; the per-type amount comes solely from the
+effective-dated `accessorial` component. Validation hardening (review-required): each ELEMENT
+is format-gated (reject newline/injection/over-length) BEFORE synonym canonicalization
+(allowlist-then-canon); the list length is capped at 8 (`too_many_accessorials`); an
+unknown/off-allowlist type → `invalid_accessorial:<val>` → needs_review. RawExtraction types
+the field `list[Any]` ON PURPOSE so a malformed element reaches the gate (per-element reject)
+instead of crashing parse. Containment preserved + tested: an injected accessorial element trips
+the gate per-element — a review, never a priced line. Accessorials price only on the computed
+path (contracted stays unchanged) — a noted scope boundary.
+
+**Multi-component pinning = single anchor + quote_components (point 2, approved).**
+`quotes.rate_id` stays the single NOT NULL anchor (contracted row, or the materialized
+`source='computed'` all-in row — so `is_computed`/UI keep working with zero change). The new
+append-only `quote_components` join pins EACH computed line (linehaul, deadhead, margin,
+fuel_surcharge, drayage_base, each accessorial) to its exact `pricing_components` version + the
+line amount. Effective-dating proven: append a new component version → a new quote pins the NEW
+version while the prior quote keeps its OLD snapshot. Changing any amount = a new effective-dated
+INSERT, never an UPDATE (forbid_mutation on both new tables: UPDATE/DELETE + TRUNCATE; verified
+the trigger fires). `pricing_components` is a NEW table (not overloaded onto lane-keyed `rates`)
+because these inputs are policy/equipment-scoped, not lane-scoped (point 1, approved). Both
+tables are server-side-write-only (REVOKE i/u/d from anon/authenticated, RLS read via the
+`private.*` helpers from migration #10).
+
+**Carry-forwards.** (1) New migrations (11/12/13) to LIVE Supabase = a deploy step (8.1 pattern);
+local `supabase db reset` covers local. (2) **Phase 10: render the `quote_components` line-item
+breakdown (linehaul/deadhead/margin/FSC/accessorials) in the review console** — the engine
+PRODUCES the pinned breakdown now; the reviewer UI showing it is deferred (the breakdown exists
+without display intentionally; the deal-scoped RLS + denormalized `deal_id` are already in place
+for it). (3) The deferred `/jobs/surcharge` FSC-component cron extension (above).
+
+**Gates:** ruff 0, mypy 0, pytest 279 passed (no skips — integration ran against the live local
+DB). Per-subtask conventional commits (container enum / schema migrations / lane table /
+accessorials gate / engine).
+
 ## 2026-06-16 — Review queue hides sent deals + shared review SELECT const
 **Bug (presentation-correctness, not safety).** The review-queue query filtered on
 `state='quoted'` ONLY. Per the locked Phase 5 semantic, a deal STAYS `'quoted'` after a
