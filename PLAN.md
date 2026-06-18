@@ -140,9 +140,11 @@ work top to bottom, check tasks as they land, and record decisions and dead-ends
 ## Phase 7 — Observability + reliability
 Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DECISIONS
 2026-06-14 "Phase 7 triage". The local half is complete; the deploy half moves to Phase 8.
-- [ ] Sentry on frontend + backend.
-      (DEPLOY-time → Phase 8: needs a Sentry DSN/project. Init seam is trivial; value is
-      hosted capture.)
+- [x] Sentry on frontend + backend.
+      (Done 2026-06-18 ops pass: backend gated `sentry_sdk.init` in `create_app()` (DSN from
+      `SENTRY_DSN`, fail-closed on empty); frontend `@sentry/nextjs` minimal App-Router wiring
+      (DSN from `NEXT_PUBLIC_SENTRY_DSN`). Both error-capture-only (no tracing/profiling), PII
+      scrubbed. DSNs set in Render + Vercel. See DECISIONS 2026-06-18.)
 - [x] Structured JSON logs with a correlation ID threaded ingest → send.
       (7.1: dependency-free JsonFormatter + contextvar; corr id = gmail_message_id bound at
       consumer.handle / poller._publish / send_quote — real ingest→send thread.)
@@ -153,8 +155,11 @@ Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DEC
 - [x] Health-check endpoints; retries with backoff; confirm DLQ replay works.
       (7.2: `/ready` (DB hard / Redis degraded) distinct from `/health`; bounded backoff;
       DLQ replay rides the flip_if_queued claim — no double-process.)
-- [ ] Supabase backups on; uptime monitor (Better Stack / UptimeRobot).
-      (DEPLOY-time → Phase 8: provider toggle + external monitor on the live URL.)
+- [~] Supabase backups on; uptime monitor (Better Stack / UptimeRobot).
+      (Uptime DONE 2026-06-18: UptimeRobot live on `/health` (liveness target), 5-min/30s —
+      doubles as the R6 operational keepalive against Render cold-start. Backups = ACCEPTED-OPEN,
+      NOT applicable: Supabase Free tier has NO automated backups/PITR (would need Pro); the
+      restore gate is accepted-open for this synthetic showcase. See RECOVERY.md §5 + DECISIONS.)
 - [x] Write `RECOVERY.md` (DLQ replay, restore, key rotation).
       (7.4: runbook traced to the 7.1–7.3 mechanisms; [local] vs [deploy — Phase 8] tagged.)
 - **Done when:** the dashboard is live and you can trace one email end to end.
@@ -197,7 +202,9 @@ Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DEC
       fetch; W2 bucket upload + `attachments`-row insert, idempotent on redelivery; Storage
       writer method. **Done when:** a real inbox PDF routes through the `attachments` bucket →
       consumer reads it → same extraction+validation gate. See DECISIONS 2026-06-15.
-- [ ] Deploy Next.js console on Vercel with secrets wired.
+- [x] Deploy Next.js console on Vercel with secrets wired.
+      (Was stale: the console has been live at freight-pipeline.vercel.app; ticked 2026-06-18
+      during the ops pass. See DECISIONS 2026-06-18.)
 - [ ] Connection strings in GitHub Secrets + provider secret stores.
 - [ ] CI/CD: lint/type/test/build/deploy on push; branch protection; PR previews.
 - **Done when:** a synthetic email flows through the *cloud* path and a reply sends.

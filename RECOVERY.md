@@ -103,12 +103,16 @@ the retry simply sends.
 
 ---
 
-## 5. Restore from backup — [deploy — Phase 8]
+## 5. Restore from backup — [deploy: ACCEPTED-OPEN on Free tier]
 
-**Prerequisite (a Phase 7/8 deploy task, must be ON):** Supabase automated backups + PITR
-enabled for the project. Until enabled, there is no restore point — this is a release gate.
+**Tier reality (honest, not aspirational).** The **Supabase Free tier provides NO automated
+backups — there is no restore point.** The restore gate is therefore **ACCEPTED-OPEN** for this
+synthetic showcase deployment: data is synthetic and re-seedable, so a total DB loss is a
+re-seed, not a data-loss incident. A **production** deployment would require **Supabase Pro**
+(scheduled daily backups / PITR) to close this gate. Documented honestly rather than claiming a
+DR capability that does not exist on the deployed tier.
 
-**Procedure:**
+**Procedure (applies once on Pro, where a restore point exists):**
 1. In the Supabase console, restore the project to a snapshot or point-in-time.
 2. Restore is consistent for the invariant-bearing tables because they are **append-only and
    never mutated**: `rates` (effective-dated versions), `audit_log` (insert-only,

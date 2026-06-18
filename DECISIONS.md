@@ -1,6 +1,62 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-18 — Ops pass (Phase 7/8 deploy-half): Sentry, uptime, backups tier reality
+**Scope: the deploy-time observability that the local Phase 7 deliberately deferred** (see the
+2026-06-14 "Phase 7 triage" split). Console work (mine) was done in parallel: two Sentry
+projects (error-monitoring only — no tracing/profiling/metrics), DSNs set in Render
+(`SENTRY_DSN`) + Vercel (`NEXT_PUBLIC_SENTRY_DSN`), UptimeRobot live on `/health`.
+
+**Sentry posture = MINIMAL, not maximal (over-instrumentation is the same defect class as
+over-engineering).** Backend: a gated `configure_sentry(settings)` in `create_app()` calls
+`sentry_sdk.init` ONLY when `settings.sentry_dsn` is non-empty — error capture only
+(`traces_sample_rate=0.0`, no APM/profiling), `environment=app_env` (filter prod from local
+noise). The FastAPI/Starlette integration auto-enables (ships with the base SDK; no extra
+package). Frontend: `@sentry/nextjs` minimal App-Router wiring — `sentry.{client,server,edge}
+.config.ts` + `instrumentation.ts` (`onRequestError`) + `app/global-error.tsx`,
+`tracesSampleRate: 0`. **Deliberately SKIPPED: sourcemap upload / `withSentryConfig` auth-token /
+tunneling** — `next.config.mjs` wraps with `withSentryConfig(..., {silent:true, sourcemaps:
+{disable:true}})` so the wrapper injects instrumentation but uploads nothing; minified traces
+are acceptable for a showcase.
+
+**PII discipline — pre-empts THREAT_MODEL R3 (real-PII delta).** Backend init sets
+`send_default_pii=False` (no headers/cookies/client-IP) AND `max_request_body_size="never"`, so
+an error inside `/ingest` reports the stack trace but NEVER the inbound email payload
+(sender/to_email/body). Data is synthetic today, but this holds the same discipline as the 7.1
+logs so a real-PII deployment doesn't start leaking through error events. Frontend mirrors with
+`sendDefaultPii: false`.
+
+**Fail-closed contract (NON-NEGOTIABLE, tested).** Empty DSN => NO `init` => no SDK activity =>
+no crash (matches the 8.3a `""`-default config posture). `tests/test_sentry_init.py` locks both
+directions: DSN `""` ⇒ `init` NOT called (`configure_sentry` returns False); DSN set ⇒ called
+once with the exact error-only + PII-scrubbed kwargs. Frontend inherits Sentry's built-in
+no-op-on-empty-DSN behavior.
+
+**Uptime target = `/health` (liveness), NOT `/ready`.** UptimeRobot hits `/health` (200, zero
+dependency checks) every 5 min / 30s timeout — `/ready` would false-page on a fail-open Redis
+blip (degraded/200 vs not_ready/503 is a diagnostic distinction, not an uptime signal). The
+5-min ping **doubles as the R6 operational keepalive** against Render free-tier cold-start
+(sleeps after 15 min idle) — closing that THREAT_MODEL R6 carry-forward as a side effect.
+
+**Backups = ACCEPTED-OPEN (tier reality, not a capability claim).** Supabase **Free tier has NO
+automated backups / no PITR** — there is no restore point. Rather than claim DR that doesn't
+exist, the restore gate (RECOVERY.md §5) is documented ACCEPTED-OPEN for this synthetic,
+re-seedable showcase; a production deployment would require Supabase Pro. PLAN's backups line is
+marked `[~]` accepted-open/N-A, deliberately NOT ticked as "enabled".
+
+**Next 14 wiring note (so it isn't re-litigated).** The build warns that `sentry.client
+.config.ts` is deprecated in favor of `instrumentation-client.ts` — but that file convention is
+**Next 15.3+**, and the warning only bites under **Turbopack**, which we don't use (webpack
+build, exit 0, client config picked up). `sentry.client.config.ts` is the correct convention for
+Next 14.2; the migration is a future-Next concern, not now.
+
+**PLAN line 200 was STALE.** "Deploy Next.js console on Vercel" was unchecked but the console has
+been live at **freight-pipeline.vercel.app**; ticked during this pass with a staleness note.
+
+**Gates:** backend ruff 0, mypy 0, pytest **310 passed**; frontend `npm run lint` 0,
+`tsc --noEmit` 0, `npm run build` 0. Read per-command (no `>/dev/null` masking — the 2026-06-14
+lesson). `sentry-sdk==2.63.0`, `@sentry/nextjs@^10`.
+
 ## 2026-06-18 — Phase 9 eval: criterion choices, denominators, + the fence-swallow fix
 **The eval measures the REAL `extract()` gate over the 14-sample corpus, Gmail-independent.**
 Instruments are committed scripts (run on demand, not in pytest — they need live HF / the live
