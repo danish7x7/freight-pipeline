@@ -1,6 +1,7 @@
 """HFLLMClient slice: parse, transient errors, malformed-JSON tolerance (no network)."""
 
 import json
+import logging
 from collections.abc import Callable
 
 import httpx
@@ -59,12 +60,49 @@ async def test_network_error_raises_transient() -> None:
         await client.complete("x")
 
 
-async def test_malformed_model_json_is_low_confidence_not_a_crash() -> None:
+async def test_malformed_model_json_is_low_confidence_not_a_crash(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     client = _client(lambda _req: _chat_response("this is not json"))
-    result = await client.complete("x")
+    with caplog.at_level(logging.WARNING, logger="freight.llm.hf"):
+        result = await client.complete("x")
     assert result.data == {}
     assert result.confidence is None
     assert result.raw == "this is not json"
+    # Non-negotiable: the swallow is dead — an unparseable body LOGS a warning.
+    assert any(
+        rec.levelno == logging.WARNING and rec.getMessage() == "hf_parse_invalid_json"
+        for rec in caplog.records
+    )
+
+
+async def test_json_wrapped_in_code_fence_is_parsed() -> None:
+    """The Phase 9 regression: ```json fenced output must parse, not route to review."""
+    fenced = (
+        '```json\n{"intent": "rate_request", "origin_state": "IL", '
+        '"confidence": 0.9}\n```'
+    )
+    client = _client(lambda _req: _chat_response(fenced))
+    result = await client.complete("x")
+    assert result.data["intent"] == "rate_request"
+    assert result.data["origin_state"] == "IL"
+    assert result.confidence == 0.9
+
+
+async def test_json_wrapped_in_plain_fence_is_parsed() -> None:
+    fenced = '```\n{"intent": "rc", "load_number": "88213"}\n```'
+    client = _client(lambda _req: _chat_response(fenced))
+    result = await client.complete("x")
+    assert result.data["intent"] == "rc"
+    assert result.data["load_number"] == "88213"
+
+
+async def test_clean_json_still_parses_unchanged() -> None:
+    content = json.dumps({"intent": "negotiation", "confidence": 0.7})
+    client = _client(lambda _req: _chat_response(content))
+    result = await client.complete("x")
+    assert result.data["intent"] == "negotiation"
+    assert result.confidence == 0.7
 
 
 async def test_permanent_4xx_propagates() -> None:
