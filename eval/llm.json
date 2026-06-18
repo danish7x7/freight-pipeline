@@ -1,0 +1,61 @@
+{
+  "rate_usd_per_mtok": null,
+  "samples": [
+    {
+      "id": "synthetic-0001",
+      "latency_ms": 2142.6677650015336,
+      "prompt_tokens": 247,
+      "completion_tokens": 87,
+      "total_tokens": 334
+    },
+    {
+      "id": "synthetic-0002",
+      "latency_ms": 4434.629640978528,
+      "prompt_tokens": 251,
+      "completion_tokens": 84,
+      "total_tokens": 335
+    },
+    {
+      "id": "synthetic-0003",
+      "latency_ms": 4347.3376740003005,
+      "prompt_tokens": 238,
+      "completion_tokens": 78,
+      "total_tokens": 316
+    },
+    {
+      "id": "synthetic-0004",
+      "latency_ms": 3657.0216760155745,
+      "prompt_tokens": 235,
+      "completion_tokens": 79,
+      "total_tokens": 314
+    },
+    {
+      "id": "synthetic-0005",
+      "latency_ms": 2315.6188940047286,
+      "prompt_tokens": 231,
+      "completion_tokens": 79,
+      "total_tokens": 310
+    },
+    {
+      "id": "synthetic-0006",
+      "latency_ms": 3629.9620869976934,
+      "prompt_tokens": 239,
+      "completion_tokens": 79,
+      "total_tokens": 318
+    },
+    {
+      "id": "synthetic-0007",
+      "latency_ms": 3290.751023014309,
+      "prompt_tokens": 236,
+      "completion_tokens": 88,
+      "total_tokens": 324
+    },
+    {
+      "id": "synthetic-0008",
+      "latency_ms": 2251.4746400120202,
+      "prompt_tokens": 220,
+      "completion_tokens": 79,
+      "total_tokens": 299
+    }
+  ]
+}

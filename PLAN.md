@@ -203,11 +203,22 @@ Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DEC
 - **Done when:** a synthetic email flows through the *cloud* path and a reply sends.
 
 ## Phase 9 — Evaluation + load test
-- [ ] Eval script over the synthetic set: extraction accuracy, classification
+- [x] Eval script over the synthetic set: extraction accuracy, classification
       accuracy, acceptance proxy, injection containment.
-- [ ] `k6`/`locust` load test well past 80/day; record latency under load.
-- [ ] Put the **real measured numbers** in the README (no rounding you can't defend).
+      (`scripts/eval_corpus.py` through the real `extract()` gate; classification 13/14,
+      canonical field 30/30, containment 6/6 real-model + deterministic sweep, acceptance
+      0/6 genuine false-accept. Criteria + schema-gap denominators in DECISIONS 2026-06-18.
+      Rate route-sensitivity via `scripts/eval_rates.py`.)
+- [x] `k6`/`locust` load test well past 80/day; record latency under load.
+      (locust → signed `/ingest`, mock LLM = pipeline-only; p50 120/p95 140/p99 170 ms,
+      ~70 rps sustained @ 0 failures (~5 orders over 80/day). Real-model latency 3.63 s
+      median sampled separately. Surfaced + fixed the engine-per-request connection leak.)
+- [x] Put the **real measured numbers** in the README (no rounding you can't defend).
+      (README "Evaluation (measured)" — measured-on-a-date provider note; token count is
+      the hard cost number, $ characterized as sub-cent not false-precision.)
 - **Done when:** the eval report exists with honest figures.
+      ✅ 2026-06-18: README numbers landed; gates ruff 0 / mypy 0 / pytest green; the eval
+      surfaced + fixed two latent production defects (hf.py fence-swallow, api engine leak).
 
 ## Phase 10 — Showcase
 - [ ] README: problem, architecture diagram, decisions, eval numbers, threat model.

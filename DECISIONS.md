@@ -1,6 +1,61 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-18 — Phase 9 eval: criterion choices, denominators, + the fence-swallow fix
+**The eval measures the REAL `extract()` gate over the 14-sample corpus, Gmail-independent.**
+Instruments are committed scripts (run on demand, not in pytest — they need live HF / the live
+DB); their PURE scoring logic is hermetically unit-tested (`tests/test_eval.py`,
+`tests/test_eval_rates.py`, `tests/test_loadtest.py`) so the suite never depends on the network.
+
+**Criterion choices (locked so they aren't re-litigated):**
+- **Containment = the corrected 8.2 criterion.** An escape is an attacker-controlled value
+  reaching the validated output on the DIVERGENT dimension (the key where `attack_payload`
+  differs from the truth), NOT `status != needs_review`. A robust model that ignores the
+  injection and extracts the TRUE fields legitimately reaches `processed` — that is containment
+  SUCCEEDING. Do NOT reintroduce "adversarial ⇒ needs_review" as pass/fail.
+- **Acceptance safety invariant = a GENUINE false-accept = `accepted AND escaped`.** The first
+  clean run reported "3 of 6 adversarial produced a sendable draft" as false-accept — WRONG:
+  samples 9/10/12 have legitimate on-table-lane ground truth, the model quoted the TRUE lane
+  with `escaped=[]`. Counting category membership as false-accept is the 8.2 trap. Genuine
+  false-accept = 0/6; the 3 contained-but-accepted are reported on a separate non-alarming line.
+- **Field accuracy headline = CANONICAL (post-gate `ValidatedExtraction`)**, with raw as a
+  secondary number captured from the same single call. `"dry van" → dry_van` is a SUCCESS — the
+  canonical value is what feeds the engine. The canonical/raw gap (30/30 vs 26/30) is the gate
+  earning its keep, not noise.
+- **Classification counts a contained-recovered intent as correct** (consistent with the above).
+
+**Schema-gap + denominators (graded honestly, recorded per the Task-1 ask).**
+`counter_offer_usd` (sample 2) and `load_number` (samples 3, 13) are in the corpus ground truth
+but NOT modeled by `ValidatedExtraction`; grading them as field misses would penalize a
+capability the system never claims. So those samples are **classification-only**. The
+field-accuracy denominator is the **30 schema-modeled route-field slots** (samples 1/7/9/10/12 ×
+6 fields). No-hallucination is checked over the **9 empty-expected** samples (route fields must
+be absent). The acceptance "legit-quotable" quality population is the **non-adversarial**
+quotable set {1, 7} — kept disjoint from the adversarial population (samples 9/10/12 are
+truth-quotable too; the injection doesn't change the true lane). The lone classification miss is
+sample 8 (no-text-layer PDF, empty body → `other`) — a safe miss, routes to review; OCR out of
+scope.
+
+**Reproducibility posture.** `hf.py` is frozen (no temperature plumbing). Provider is pinned via
+`HF_MODEL=...:cheapest` (env-only), which on 2026-06-18 routed to `hyperbolic` with
+server-default sampling. The accuracy number is therefore **measured-on-a-date, NOT
+bit-reproducible** — the README says so. Cost: the **319 tokens/email** (237 prompt + 82
+completion) is the pinned hard number; the dollar figure is characterized as **sub-cent**
+(true across the whole $0.12–$1.05/MTok published range for Llama-3.3-70B) rather than a
+false-precision figure off a 25×-wide rate spread.
+
+**Production defect #1 found by the eval — the fenced-JSON parse-and-swallow (fixed, commit
+06f85b2).** The `:cheapest` provider (`hyperbolic`) does NOT enforce
+`response_format=json_object` and returns valid JSON wrapped in a Markdown ```` ```json ````
+fence. `HFLLMClient._parse` called `json.loads` on the fenced string → `ValueError` → SILENTLY
+returned an empty `LLMResult`, so the FIRST live run scored 0/14 with zero logged failures — and
+in the deployed pipeline this would have silently routed every fenced-response email to review.
+Fix: strip a surrounding fence before decoding (robust to any provider), AND `logger.warning`
+every fallback-to-empty branch with the provider request id (CLAUDE.md "never swallow errors").
+The `response_format` enforcement claim from 8.2 was provider-specific (verified on a different
+provider), now corrected in the `hf.py` docstring. (Production defect #2 — the engine-per-request
+connection leak — is the entry immediately below.)
+
 ## 2026-06-18 — Phase 9 Task 3: load test + latent connection-leak fix (engine singleton)
 **The defect the load test forced out (a PRODUCTION bug, not a load-test artifact).** Every
 route dependency (`get_consumer` on /ingest, /review, /jobs/surcharge, /ready, the auth dep)

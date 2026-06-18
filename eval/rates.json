@@ -1,0 +1,58 @@
+{
+  "meta": {
+    "date": "2026-06-18",
+    "source": "live local Supabase (INGEST_TEST_DSN)"
+  },
+  "lanes": [
+    {
+      "label": "Chicago, IL -> Dallas, TX",
+      "equipment": "dry_van",
+      "miles": 925,
+      "total_cents": 251748,
+      "currency": "USD",
+      "lines": {
+        "linehaul": 166500,
+        "deadhead": 19980,
+        "margin": 27972,
+        "fuel_surcharge": 37296
+      }
+    },
+    {
+      "label": "Atlanta, GA -> Miami, FL",
+      "equipment": "dry_van",
+      "miles": 665,
+      "total_cents": 180985,
+      "currency": "USD",
+      "lines": {
+        "linehaul": 119700,
+        "deadhead": 14364,
+        "margin": 20109,
+        "fuel_surcharge": 26812
+      }
+    },
+    {
+      "label": "Newark, NJ -> Boston, MA",
+      "equipment": "dry_van",
+      "miles": 225,
+      "total_cents": 61236,
+      "currency": "USD",
+      "lines": {
+        "linehaul": 40500,
+        "deadhead": 4860,
+        "margin": 6804,
+        "fuel_surcharge": 9072
+      }
+    },
+    {
+      "label": "container drayage (flat)",
+      "equipment": "container",
+      "miles": null,
+      "total_cents": 54000,
+      "currency": "USD",
+      "lines": {
+        "drayage_base": 45000,
+        "fuel_surcharge": 9000
+      }
+    }
+  ]
+}
