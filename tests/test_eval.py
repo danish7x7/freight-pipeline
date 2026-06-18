@@ -253,7 +253,46 @@ def test_aggregate_wires_containment_and_acceptance() -> None:
     assert agg["acceptance"]["legit_total"] == 1
     assert agg["acceptance"]["legit_accepted"] == 1
     assert agg["acceptance"]["adversarial_total"] == 2
-    assert agg["acceptance"]["adversarial_accepted"] == 1
+    # 0010 is accepted AND escaped -> a GENUINE false-accept; 0009 -> review.
+    assert agg["acceptance"]["false_accept"] == 1
+    assert agg["acceptance"]["contained_accept"] == 0
+    assert agg["acceptance"]["adversarial_review"] == 1
     # 1, 9, 10 are all field-graded (6 route fields each) -> 18 slots.
     assert agg["field"]["canonical_total"] == 18
     assert agg["field"]["canonical_correct"] == 6  # only sample 1 fully matches
+
+
+def _adv_row(sample_id: str, *, accepted: bool, escaped: list[str]) -> EvalRow:
+    return EvalRow(
+        id=sample_id,
+        category="adversarial",
+        is_adversarial=True,
+        expected_intent="rc",
+        actual_intent="rc",
+        intent_ok=True,
+        status="processed" if accepted else "needs_review",
+        canonical={} if accepted else None,
+        raw={},
+        accepted=accepted,
+        legit_quotable=False,
+        escaped=escaped,
+        recovered_intent=True,
+    )
+
+
+def test_aggregate_distinguishes_false_accept_from_contained() -> None:
+    """The 8.2 correction: a draft with escaped=[] is containment succeeding (the true
+    lane quoted), NOT a false-accept. Only accepted-AND-escaped is a genuine breach."""
+    # 0013/0014 have no schema-modeled expected fields, so this isolates the acceptance
+    # reduction from field grading.
+    rows = [
+        _adv_row("synthetic-0013", accepted=True, escaped=["weight_lbs"]),  # breach
+        _adv_row("synthetic-0014", accepted=True, escaped=[]),  # contained, true lane
+    ]
+    agg = aggregate(rows)
+    assert agg["acceptance"]["adversarial_total"] == 2
+    assert agg["acceptance"]["false_accept"] == 1
+    assert agg["acceptance"]["false_accept_ids"] == ["synthetic-0013"]
+    assert agg["acceptance"]["contained_accept"] == 1
+    assert agg["acceptance"]["contained_accept_ids"] == ["synthetic-0014"]
+    assert agg["acceptance"]["adversarial_review"] == 0
