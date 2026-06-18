@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from freight.auth import Reviewer, require_reviewer
 from freight.config import get_settings
-from freight.db.repository import IngestRepository, make_engine
+from freight.db.repository import IngestRepository, get_engine
 from freight.factories import build_gmail_client
 from freight.interfaces import GmailClient
 from freight.security.http_rate_limit import RateLimit
@@ -24,7 +24,7 @@ ReviewerDep = Annotated[Reviewer, Depends(require_reviewer)]
 def get_review_deps() -> tuple[IngestRepository, GmailClient]:
     """Build (repo, gmail) from config (overridden in tests)."""
     settings = get_settings()
-    return IngestRepository(make_engine(settings.database_url)), build_gmail_client(
+    return IngestRepository(get_engine(settings.database_url)), build_gmail_client(
         settings
     )
 

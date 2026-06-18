@@ -14,7 +14,7 @@ from freight.api.routes.poll import router as poll_router
 from freight.api.routes.review import router as review_router
 from freight.api.routes.surcharge import router as surcharge_router
 from freight.config import get_settings
-from freight.db.repository import IngestRepository, make_engine
+from freight.db.repository import IngestRepository, get_engine
 from freight.observability import configure_logging
 from freight.observability.metrics import refresh_db_gauges
 from freight.observability.readiness import ReadinessReport, check_readiness
@@ -26,7 +26,7 @@ logger = logging.getLogger("freight.api")
 def get_readiness_report() -> ReadinessReport:
     """Probe the hard (DB) and soft (Redis) deps. Overridden in tests."""
     settings = get_settings()
-    return check_readiness(make_engine(settings.database_url), settings.redis_url)
+    return check_readiness(get_engine(settings.database_url), settings.redis_url)
 
 
 def refresh_gauges_from_db() -> None:
@@ -36,7 +36,7 @@ def refresh_gauges_from_db() -> None:
     serves the in-memory counters. Overridden in tests.
     """
     settings = get_settings()
-    repo = IngestRepository(make_engine(settings.database_url))
+    repo = IngestRepository(get_engine(settings.database_url))
     try:
         refresh_db_gauges(repo.count_ingest_backlog(), repo.count_sends_claimed())
     except SQLAlchemyError as exc:

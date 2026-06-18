@@ -25,7 +25,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from freight.config import get_settings
-from freight.db.repository import IngestRepository, make_engine
+from freight.db.repository import IngestRepository, get_engine
 from freight.factories import build_llm_client
 from freight.ingestion.consumer import IngestConsumer, IngestError
 from freight.interfaces.types import QueueMessage
@@ -45,7 +45,7 @@ router = APIRouter()
 def get_consumer() -> IngestConsumer:
     """Build the consumer from config (overridden in tests)."""
     settings = get_settings()
-    repo = IngestRepository(make_engine(settings.database_url))
+    repo = IngestRepository(get_engine(settings.database_url))
     # Real Supabase Storage reader only when a bucket is configured (Render); otherwise
     # the consumer falls back to the UnconfiguredStorageReader placeholder (body-only
     # path). Env-driven swap — no code change to flip. (8.3b)

@@ -11,7 +11,7 @@ from fastapi import Depends, Header, HTTPException
 
 from freight.auth.jwt import Identity, JwtError, SupabaseJwtVerifier
 from freight.config import get_settings
-from freight.db.repository import IngestRepository, UserRecord, UserRole, make_engine
+from freight.db.repository import IngestRepository, UserRecord, UserRole, get_engine
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ def get_verifier() -> SupabaseJwtVerifier:
 
 
 def get_auth_repo() -> IngestRepository:
-    return IngestRepository(make_engine(get_settings().database_url))
+    return IngestRepository(get_engine(get_settings().database_url))
 
 
 VerifierDep = Annotated[_Verifier, Depends(get_verifier)]

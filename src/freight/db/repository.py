@@ -11,6 +11,7 @@ reconciliation sweep (``list_stuck_received``) re-enqueues.
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
+from functools import cache
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -428,6 +429,23 @@ def make_engine(database_url: str) -> Engine:
         pool_pre_ping=True,
         connect_args={"prepare_threshold": None},
     )
+
+
+@cache
+def get_engine(database_url: str) -> Engine:
+    """Return the PROCESS-LEVEL singleton Engine for ``database_url`` (one shared pool).
+
+    A SQLAlchemy ``Engine`` is a long-lived object that owns its own connection pool;
+    constructing one PER REQUEST (the prior route-dependency pattern) leaked connections
+    against the Supabase transaction pooler on every call and exhausts slots under load.
+    Every runtime call site (route deps, the poller, readiness) resolves the engine
+    through here so the whole process shares ONE pool. It delegates to ``make_engine``,
+    so the pooler args (``prepare_threshold=None``, ``pool_pre_ping``) are preserved
+    verbatim; the default small pool (5 + 10 overflow) is correct against the pooler,
+    which is itself multiplexing. Tests that need an isolated lifecycle still call
+    ``make_engine`` directly.
+    """
+    return make_engine(database_url)
 
 
 class IngestRepository:

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from redis import Redis
 
 from freight.config import get_settings
-from freight.db.repository import IngestRepository, make_engine
+from freight.db.repository import IngestRepository, get_engine
 from freight.rates import CachedRateLookup
 from freight.security.cron_auth import require_cron_secret
 from freight.security.http_rate_limit import RateLimit
@@ -23,7 +23,7 @@ router = APIRouter()
 def get_surcharge_runner() -> Callable[[], int]:
     """Build the surcharge runner from config (overridden in tests)."""
     settings = get_settings()
-    repo = IngestRepository(make_engine(settings.database_url))
+    repo = IngestRepository(get_engine(settings.database_url))
     cache = CachedRateLookup(repo, Redis.from_url(settings.redis_url))
 
     def _run() -> int:

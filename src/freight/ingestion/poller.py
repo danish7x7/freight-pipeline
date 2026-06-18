@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 
 from freight.cache.redis_client import DEFAULT_TTL_SECONDS, RedisCache
 from freight.config import Settings, get_settings
-from freight.db.repository import IngestRepository, make_engine
+from freight.db.repository import IngestRepository, get_engine
 from freight.factories import build_gmail_client, build_queue
 from freight.ingestion.idempotency import ClaimGate
 from freight.interfaces import GmailClient, Queue
@@ -107,7 +107,7 @@ class Poller:
 
 def build_poller(settings: Settings) -> Poller:
     """Construct a Poller from config (mock or real backends, per settings)."""
-    engine = make_engine(settings.database_url)
+    engine = get_engine(settings.database_url)
     return Poller(
         gmail=build_gmail_client(settings),
         queue=build_queue(settings),

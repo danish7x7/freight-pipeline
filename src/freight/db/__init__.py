@@ -19,6 +19,7 @@ from freight.db.repository import (
     RateRecord,
     SendClaim,
     UserRecord,
+    get_engine,
     make_engine,
 )
 
@@ -35,5 +36,6 @@ __all__ = [
     "RateRecord",
     "SendClaim",
     "UserRecord",
+    "get_engine",
     "make_engine",
 ]
