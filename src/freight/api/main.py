@@ -76,9 +76,14 @@ def create_app() -> FastAPI:
     app = FastAPI(title="freight-pipeline", version=__version__)
     configure_cors(app, settings)
 
-    @app.get("/health")
+    @app.api_route("/health", methods=["GET", "HEAD"])
     async def health() -> dict[str, Literal["ok"]]:
-        """Liveness: the process is up and serving (no dependency checks)."""
+        """Liveness: the process is up and serving (no dependency checks).
+
+        Answers both GET and HEAD: HEAD is the conventional lightweight uptime probe
+        (UptimeRobot's default), and a GET-only route 405s it. Body is identical for
+        GET; per spec HEAD returns headers only.
+        """
         return {"status": "ok"}
 
     @app.get("/ready")
