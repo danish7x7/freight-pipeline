@@ -1,6 +1,48 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-18 — Phase 9 Task 3: load test + latent connection-leak fix (engine singleton)
+**The defect the load test forced out (a PRODUCTION bug, not a load-test artifact).** Every
+route dependency (`get_consumer` on /ingest, /review, /jobs/surcharge, /ready, the auth dep)
+and the poller built a NEW SQLAlchemy `Engine` per request via `make_engine()` — uncached and
+never disposed — so each call leaked a connection pool against the Supabase transaction pooler.
+Invisible at the designed ~80/day (QStash pushes one /ingest at a time) but **monotonic: the
+deployed Render pipeline has been leaking on every request since build**. The load test made it
+fail FAST instead of slow-and-mysterious: 50 concurrent users → 66% of requests 500'd with
+Postgres `remaining connection slots are reserved`. **This is the load-test analog of the
+2026-06-18 hf.py fence bug** — a real production fault a Phase 9 instrument surfaced, fixed, not
+papered over.
+
+**Fix = process-level singleton engine.** New `get_engine()` (`@functools.cache` keyed on
+`database_url`) reused by ALL runtime call sites; the whole process shares ONE pool. It
+DELEGATES to `make_engine`, so the pooler args are preserved VERBATIM (`prepare_threshold=None`
+for pgbouncer transaction mode — see 2026-06-15 — and `pool_pre_ping`); the default small pool
+(5 + 10 overflow) is correct against the multiplexing pooler (a large per-process pool would
+fight it). `make_engine` stays the UNCACHED low-level constructor for tests/scripts that own
+their own `dispose()` lifecycle. A SQLAlchemy Engine is designed as a long-lived process
+singleton; per-request construction is the documented anti-pattern. All 7 call sites verified
+switched (grep); `tests/test_engine_singleton.py` (hermetic, lazy create_engine) locks
+same-URL→same-engine, distinct-URL→distinct, make_engine-uncached.
+
+**Load-test methodology (the honest numbers).** locust → POST /ingest on local uvicorn,
+`llm_backend=mock` (isolates pipeline latency EXCLUDING HF), local Postgres+Redis,
+`rate_limit_enabled=false` (measure the pipeline, not the 6.4 limiter). Each request carries a
+UNIQUE pre-seeded `gmail_message_id` (idempotent clean-slate seed) so finalize does real work
+(a 'queued' → needs_review flip; the default mock yields rate_request-with-no-route → low
+completeness → needs_review, a single-row flip with no deal/quote cascade — clean teardown).
+Envelopes are signed (`scripts/qstash_sign.py`) and verified by the endpoint's REAL
+`qstash.Receiver` — `tests/test_loadtest.py` proves tamper/wrong-key/wrong-url are rejected, so
+the gate is measured, not bypassed. Two reads (post-fix, 0 failures, 0 connection errors):
+uncontended (10 users ≤ pool) **p50 120 / p95 140 / p99 170 ms**; saturated (40 users) ~69 rps
+with latency rising to backpressure (p50 410 ms). Throughput ~70 rps on the local stack
+(pooler round-trip bound) = ~6M/day, ~5 orders of magnitude over 80/day. Real-model latency is
+a SEPARATE number (live HF, `:cheapest`/hyperbolic): **median 3.63 s, p95 4.44 s**, **319
+tokens/email** (237 prompt + 82 completion) → ~$0.00004–0.0003/email at published Llama-3.3-70B
+provider rates ($0.12–$1.05/MTok; exact hyperbolic rate to confirm in the README).
+
+**Carry-forward (NOT done — measure-don't-optimize):** the 8.3b pre-LLM sender filter is still
+unbuilt; the 319 tokens/email + 3.6 s/email are the measured inputs for that future decision.
+
 ## 2026-06-17 — Real route-aware rate engine (flat $2,200 → lane-table × versioned components)
 **The flat→real transition (resolves the 2026-06-16 route-blind carry-forward).** Before:
 `compute_rate` was route-BLIND — `base_by_equipment + _FLAT_MILES(800) × _PER_MILE(150) +

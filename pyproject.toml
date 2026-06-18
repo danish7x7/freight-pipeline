@@ -32,6 +32,7 @@ dev = [
     "mypy>=1.13",
     "fpdf2>=2.8.7",
     "pip-audit>=2.10.1",
+    "locust>=2.44.3",
 ]
 
 [build-system]
