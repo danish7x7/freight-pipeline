@@ -22,6 +22,7 @@ dependencies = [
     # so every DB path needs it. (Was dev-only in Phase 1; promoted at 8.3a — the --no-dev
     # image had no driver and /ready + all DB routes 500'd. See DECISIONS 2026-06-15.)
     "psycopg[binary]>=3.3.4",
+    "sentry-sdk>=2.63.0",
 ]
 
 [dependency-groups]

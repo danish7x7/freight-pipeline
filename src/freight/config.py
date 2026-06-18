@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # --- App ---
     app_env: AppEnv = AppEnv.local
     log_level: str = "INFO"
+    # Sentry error-monitoring DSN (backend project). Env-only; empty => Sentry stays
+    # DISABLED (no init, no SDK activity) — fail-closed, so local/dev and tests are
+    # silent with zero config. Set on Render at deploy. Error capture only: no
+    # tracing/profiling, and PII (request bodies, headers, IP) is never sent.
+    sentry_dsn: str = ""
     # Env-only; no dev fallback (8.3a). Local values come from .env (see .env.example).
     app_secret: str = ""
     # Shared bearer secret for the cron-triggered endpoints (/poll, /jobs/surcharge).

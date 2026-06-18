@@ -3,6 +3,7 @@
 import logging
 from typing import Annotated, Literal
 
+import sentry_sdk
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -13,7 +14,7 @@ from freight.api.routes.ingest import router as ingest_router
 from freight.api.routes.poll import router as poll_router
 from freight.api.routes.review import router as review_router
 from freight.api.routes.surcharge import router as surcharge_router
-from freight.config import get_settings
+from freight.config import Settings, get_settings
 from freight.db.repository import IngestRepository, get_engine
 from freight.observability import configure_logging
 from freight.observability.metrics import refresh_db_gauges
@@ -43,10 +44,35 @@ def refresh_gauges_from_db() -> None:
         logger.warning("metrics: DB gauge refresh failed, counters only: %s", exc)
 
 
+def configure_sentry(settings: Settings) -> bool:
+    """Initialize Sentry error monitoring, but only if a DSN is configured.
+
+    Fail-closed: an empty ``sentry_dsn`` (the default) means NO ``init`` call and no
+    SDK activity — local/dev and tests stay silent with zero config. Error capture
+    only: ``traces_sample_rate=0`` (no tracing/APM/profiling). PII discipline:
+    ``send_default_pii=False`` keeps headers/cookies/client-IP out, and
+    ``max_request_body_size="never"`` means inbound email payloads
+    (sender/to_email/body) are never attached to an event — pre-empting THREAT_MODEL
+    R3 (real-PII delta) even though data is synthetic today. Returns True if Sentry
+    was initialized.
+    """
+    if not settings.sentry_dsn:
+        return False
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        environment=settings.app_env,
+        send_default_pii=False,
+        max_request_body_size="never",
+        traces_sample_rate=0.0,
+    )
+    return True
+
+
 def create_app() -> FastAPI:
     """Build and return the FastAPI application."""
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure_sentry(settings)
     app = FastAPI(title="freight-pipeline", version=__version__)
     configure_cors(app, settings)
 
