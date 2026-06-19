@@ -1,0 +1,137 @@
+name: ci
+
+# Quality gates only. Render + Vercel auto-deploy on push to main (platform-native);
+# this workflow does NOT deploy — it gates the code. Branch protection requiring these
+# jobs is the linchpin that stops a red build from reaching the auto-deploy.
+#
+# No path filters: a required status check that gets skipped by a path filter blocks a
+# PR forever, so every push/PR runs the full gate.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Point the integration fixtures at the started services. These match the test
+      # defaults, but are set explicitly so the suite RUNS (never skip-passes).
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      INGEST_TEST_DSN: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      RLS_TEST_DSN: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      REDIS_URL: redis://localhost:6379/0
+      REDIS_TEST_URL: redis://localhost:6379/0
+      RATE_CACHE_TEST_REDIS: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv (+ Python 3.12)
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Set up the Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          # Pinned (not latest): `supabase start` is the slowest/most flake-prone step
+          # and a new external dep — a CLI release must not silently change CI behavior.
+          version: 2.105.0
+
+      # Real Supabase Postgres (NOT a bare postgres): the RLS/audit tests need the
+      # Supabase auth schema + anon/authenticated/service_role roles + request.jwt.claims
+      # plumbing that the image bootstraps. `supabase start` applies supabase/migrations/*
+      # (filename order) + seed.sql — the same path as local `supabase db reset` (the
+      # schema source of truth). DB-only (exclude all aux services) for speed + the
+      # smallest container surface = least flake; tests talk to Postgres on 54322 directly.
+      - name: Start the Supabase local DB
+        run: >-
+          supabase start
+          -x imgproxy,studio,inbucket,realtime,edge-runtime,functions,vector,analytics,kong,rest,storage,meta
+
+      - name: Install dependencies (runtime + dev)
+        run: uv sync --frozen
+
+      # Connectivity precheck (fail-fast): a failed `supabase start`/Redis must fail the
+      # job LOUDLY here, never let the integration tests skip-pass. Uses the project's own
+      # drivers so the check matches how the suite connects.
+      - name: Precheck — Postgres SELECT 1 + Redis PING
+        run: |
+          uv run python - <<'PY'
+          import psycopg
+          from redis import Redis
+          with psycopg.connect(
+              "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+              connect_timeout=5,
+          ) as conn:
+              conn.execute("select 1")
+          assert Redis.from_url(
+              "redis://localhost:6379/0", socket_connect_timeout=5
+          ).ping()
+          print("precheck ok: postgres + redis reachable")
+          PY
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Mypy
+        run: uv run mypy .
+
+      # -ra surfaces any residual skips in the summary (we do NOT fail on skips — the
+      # precheck already guarantees the services are up so the integration tests run).
+      - name: Pytest
+        run: uv run pytest -ra
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    # Build the ACTUAL prod image (Dockerfile runs `uv sync --frozen --no-dev`), which
+    # reproduces real production dependency resolution. Catches the 8.3a class: a runtime
+    # dep mis-scoped to the dev group is present under `uv sync` (so pytest is green) but
+    # MISSING from the --no-dev prod image — invisible to the test suite, fatal in prod.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the prod Docker image (--no-dev)
+        run: docker build -t freight-api:ci .

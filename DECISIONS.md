@@ -1,6 +1,67 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-18 — CI/CD: quality-gate workflow (gates code, does NOT deploy)
+**Scope decision (locked, not re-litigated): CI = QUALITY GATES + branch protection, NOT a
+deploy pipeline.** Render + Vercel already auto-deploy on push to main (platform-native). CI
+gates the code; the platforms deploy; the two stay separate — NO GitHub-Actions deploy hooks (that
+would be re-implementing deploy = over-engineering). `.github/workflows/ci.yml` triggers on `push`
+to main + all `pull_request`, with NO path filters (a required check skipped by a path filter
+blocks a PR forever). Three parallel jobs so branch protection can require each by name:
+`backend`, `frontend`, `docker`. The two existing cron workflows (poll-inbox, fuel-surcharge) are
+untouched and are not quality gates.
+
+**Closing green-by-skip = `supabase start`, NOT a bare Postgres service container (the linchpin).**
+~20 `@pytest.mark.integration` tests skip on "db not reachable", so a DB-less CI would skip-pass
+exactly the proofs that matter (RLS isolation, audit append-only, atomic finalize, rate
+versioning). A bare `postgres:17` is INSUFFICIENT: the RLS/audit tests do `set local role
+authenticated`, write `auth.users`, set `request.jwt.claims`, and exercise the migration RLS
+policies + `private.*` helpers — all of which need the Supabase **auth schema + anon/authenticated/
+service_role roles** that the *Supabase image* bootstraps (not `supabase/migrations/`).
+Hand-rolling those roles on bare PG = brittle re-implementation of Supabase internals. So CI runs
+the pinned Supabase CLI's `supabase start`, which applies `supabase/migrations/*` (filename order)
++ `seed.sql` — the same path as local `supabase db reset` / the 8.1 live-apply discipline. Started
+**DB-only** (`-x` all aux services: imgproxy/studio/inbucket/realtime/edge-runtime/functions/
+vector/analytics/kong/rest/storage/meta) for speed + the smallest container surface = least flake;
+tests hit Postgres on 54322 directly. A **Redis service container** (redis:7, health-checked) runs
+the two cache tests unskipped. The integration DSN/URL envs are set explicitly in the job (they
+match the test defaults, but explicit = the suite RUNS, never silently skip-passes).
+
+**Connectivity precheck (fail-LOUD, not skip-pass).** Before ruff/mypy/pytest a step runs
+`SELECT 1` (psycopg) + Redis `PING` via the project's OWN drivers; a failed `supabase start` or
+Redis fails the job there, instead of letting the integration tests quietly skip. Pytest runs with
+`-ra` to SURFACE any residual skip in the summary — but does NOT fail on skips (rejected the
+hard-zero-skip assertion as brittle; the precheck is the real guarantee that services are up).
+
+**Docker prod-image build gate (catches the 8.3a class).** A separate `docker` job builds the
+ACTUAL prod Dockerfile (`uv sync --frozen --no-dev`), reproducing real production dependency
+resolution. This is the ONE failure mode pytest structurally cannot see: a runtime dep mis-scoped
+to the dev group is present under `uv sync` (tests green) but MISSING from the `--no-dev` image —
+exactly the psycopg bug 8.3a found at deploy. Must be the `--no-dev` build, not dev-inclusive.
+
+**Supabase CLI PINNED (`version: 2.105.0`), not floating/latest.** `supabase start` is the
+slowest/most flake-prone step and a new external dep; a CLI release must not silently change CI
+behavior. Same reproducibility discipline as the Phase 9 eval `:cheapest`/provider pinning. (Matches
+the locally-verified CLI version, so the schema/role bootstrap is known-good.) Caching: `setup-uv`
+enable-cache (uv.lock) + `setup-node` npm cache (web/package-lock.json). Backend Python 3.12,
+frontend Node 22 (matches `@types/node ^22`).
+
+**No secrets needed for CI.** pytest is network-free (mock backends; signature tests self-generate
+keys; the live-model eval scripts are NOT in pytest); DB+Redis are ephemeral; `supabase start` runs
+offline; the frontend build needs no env. The ONLY console step is branch protection.
+
+**Branch protection = the linchpin, FULL-PR-required chosen deliberately.** Without a protection
+rule requiring `backend`+`frontend`+`docker` green, a red build still lands on main and STILL
+auto-deploys (Render/Vercel watch main). The rule is what stops the broken deploy. Chose FULL
+protection — **require a pull request before merging** + require those status checks + require
+branches up to date — so the remaining Phase 10 commits flow through PRs (showcase-correct). The
+check names only appear in the protection selector AFTER the first CI run, so the workflow lands
+first, then protection is configured (the user's console step).
+
+**Self-check:** `ci.yml` is valid YAML (the `on:` key parses to boolean `True`, same quirk the
+cron-yaml tests rely on); `test_poll_route`/`test_surcharge` parse only their own workflow files,
+unaffected (6 passed). Gates green locally: ruff 0, mypy 0, pytest 311 passed.
+
 ## 2026-06-18 — Ops pass (Phase 7/8 deploy-half): Sentry, uptime, backups tier reality
 **Scope: the deploy-time observability that the local Phase 7 deliberately deferred** (see the
 2026-06-14 "Phase 7 triage" split). Console work (mine) was done in parallel: two Sentry
