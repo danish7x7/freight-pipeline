@@ -119,13 +119,20 @@ class DemoResult(BaseModel):
     blurb: str
 
 
-def run_demo_sample(repo: IngestRepository, *, sample: SampleName) -> DemoResult:
+def run_demo_sample(
+    repo: IngestRepository, *, sample: SampleName, reviewer_uid: str
+) -> DemoResult:
     """Seed the sample and run the real pipeline on it; return the outcome for the UI.
 
     Mirrors ``IngestConsumer.handle`` (claim → extract → finalize) but with a recorded
     model output and returning the result. Uses a unique ``demo-<uuid>`` id so repeated
     presses never collide on the idempotency claim; the row is labeled (demo sender/id)
     so demo deals are identifiable and prunable.
+
+    The deal is assigned to ``reviewer_uid`` (the calling least-privilege demo reviewer)
+    so RLS scopes it to that account — NOT admin-visible — and is flagged ``is_demo`` so
+    the send service refuses it. The published demo login therefore has no path to a
+    real send (and can't see non-demo data).
     """
     spec = DEMO_SAMPLES[sample]
     gmail_message_id = f"demo-{uuid4().hex[:12]}"
@@ -160,6 +167,8 @@ def run_demo_sample(repo: IngestRepository, *, sample: SampleName) -> DemoResult
             gmail_message_id=gmail_message_id,
             outcome=outcome,
             contracted_rate=contracted,
+            assigned_reviewer=reviewer_uid,
+            is_demo=True,
         )
 
     return DemoResult(

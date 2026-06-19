@@ -55,8 +55,15 @@ def finalize(
     gmail_message_id: str,
     outcome: ExtractionOutcome,
     contracted_rate: RateRecord | None,
+    assigned_reviewer: str | None = None,
+    is_demo: bool = False,
 ) -> FinalizeResult:
-    """Run the process-once flip + deal/quote logic on the caller's transaction."""
+    """Run the process-once flip + deal/quote logic on the caller's transaction.
+
+    ``assigned_reviewer``/``is_demo`` default to the real-ingest behavior (unassigned,
+    not a demo deal); the demo path sets both so the deal is RLS-scoped to the demo
+    reviewer and refused by the send service.
+    """
     # Extraction-level review, or a not-yet-routable intent: flip + done, no deal.
     if outcome.status == "needs_review":
         won = repo.flip_if_queued(
@@ -118,7 +125,13 @@ def finalize(
     if not won:
         return FinalizeResult(won=False, deal_id=None, deal_state=None, quote_id=None)
 
-    deal_id = repo.create_deal(conn, state="new_enquiry", extracted=extracted)
+    deal_id = repo.create_deal(
+        conn,
+        state="new_enquiry",
+        extracted=extracted,
+        assigned_reviewer=assigned_reviewer,
+        is_demo=is_demo,
+    )
     repo.link_email(conn, gmail_message_id=gmail_message_id, deal_id=deal_id)
 
     # MC gate (runs before quoted). No MC / active → proceed; blocked/unknown → on_hold.

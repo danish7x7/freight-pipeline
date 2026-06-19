@@ -245,6 +245,7 @@ deals = Table(
     Column("held_from", _DEAL_STATE),
     Column("accepted_quote_id", UUID(as_uuid=False)),
     Column("updated_at", DateTime(timezone=True)),
+    Column("is_demo", Boolean, nullable=False, server_default=text("false")),
 )
 
 _SEND_STATUS = SAEnum(
@@ -385,6 +386,7 @@ class DealRecord(BaseModel):
     id: str
     state: str
     assigned_reviewer: str | None
+    is_demo: bool = False
 
 
 class QuoteRecord(BaseModel):
@@ -594,13 +596,26 @@ class IngestRepository:
             )
 
     def create_deal(
-        self, conn: Connection, *, state: str, extracted: dict[str, Any]
+        self,
+        conn: Connection,
+        *,
+        state: str,
+        extracted: dict[str, Any],
+        assigned_reviewer: str | None = None,
+        is_demo: bool = False,
     ) -> str:
-        """Create a deal from extracted route fields; return its id."""
+        """Create a deal from extracted route fields; return its id.
+
+        ``assigned_reviewer``/``is_demo`` default to the real-ingest behavior
+        (unassigned → admin-visible; not a demo deal). The demo path sets both so the
+        deal is scoped to the demo reviewer (RLS) and refused by the send service.
+        """
         stmt = (
             insert(deals)
             .values(
                 state=state,
+                assigned_reviewer=assigned_reviewer,
+                is_demo=is_demo,
                 origin_city=extracted.get("origin_city"),
                 origin_state=extracted.get("origin_state"),
                 dest_city=extracted.get("dest_city"),
@@ -879,7 +894,7 @@ class IngestRepository:
     def get_deal(self, deal_id: str) -> DealRecord | None:
         """Fetch a deal (for send/reject authz)."""
         stmt = select(
-            deals.c.id, deals.c.state, deals.c.assigned_reviewer
+            deals.c.id, deals.c.state, deals.c.assigned_reviewer, deals.c.is_demo
         ).where(deals.c.id == deal_id)
         with self._engine.connect() as conn:
             row = conn.execute(stmt).mappings().first()

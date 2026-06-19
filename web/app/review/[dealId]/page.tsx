@@ -125,13 +125,24 @@ export default function DraftDetail({ params }: { params: { dealId: string } }) 
           className="mt-2 w-full rounded-md border border-gray-300 p-2 text-sm"
         />
         <div className="mt-3 flex gap-2">
-          <Button onClick={onSend} disabled={busy || !quote}>
+          <Button onClick={onSend} disabled={busy || !quote || deal.is_demo}>
             {busy ? "Working…" : "Approve & Send"}
           </Button>
-          <Button variant="danger" onClick={onReject} disabled={busy}>
+          <Button
+            variant="danger"
+            onClick={onReject}
+            disabled={busy || deal.is_demo}
+          >
             Reject
           </Button>
         </div>
+        {deal.is_demo && (
+          <p className="mt-3 text-sm text-amber-700">
+            Demo deal — not actionable. It ran through the live validation gate and
+            pricing, but the backend refuses any send/reject for a demo deal (no real
+            email is ever sent).
+          </p>
+        )}
         {message && <p className="mt-3 text-sm text-gray-700">{message}</p>}
       </Card>
     </main>
