@@ -1,6 +1,11 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-19 — No standalone ARCHITECTURE.md (folded into README + THREAT_MODEL)
+Phase 10 doc decision: `ARCHITECTURE.md` is deliberately NOT written — the architecture lives in
+the README Mermaid diagram + `THREAT_MODEL.md` (kept in agreement on purpose), so a separate file
+would only duplicate and risk drift. `LEARNING.md` written; `DECISIONS.md` stays the standing log.
+
 ## 2026-06-19 — Live 500 on /demo/sample: schema-push must lead code-deploy
 **Incident.** The `is_demo` migration (`20260618120000_deals_is_demo.sql`) shipped in code
 and auto-deployed to Render BEFORE `supabase db push` had run against hosted Supabase, so the
