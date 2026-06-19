@@ -1,6 +1,52 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-18 — Phase 10 demo: "load sample order" (recorded model, REAL gate)
+**Goal:** let a visitor to the live console watch the pipeline — and specifically the
+injection defense — without a real inbound email. **Chosen injection point = option (b):**
+a guarded `POST /demo/sample` that runs the REAL extract→validate→rate→finalize path on a
+fixed corpus sample, server-side. Rejected: (a) full poll/QStash/signature replay (needs a
+signed delivery — either key exposure or a self-publish round-trip, no extra demo value);
+(c) seeding a pre-validated deal (skips the gate — the novel part); (d) an unsigned
+`/ingest` POST (punches through B1 — never).
+
+**Recorded model output, REAL gate (the key decision, not a weakening).** The demo does
+NOT call the live HF model per press. A `RecordedLLMClient` returns a fixed output drawn
+from the labeled synthetic corpus (single source of truth), and the REAL deterministic
+gate (`extraction.validate`), rate engine, and `finalize` run on it. This MIRRORS the
+canonical containment proof: `tests/test_containment.py` feeds the gate a fully-fooled
+model output (`attack_payload`) and shows the gate contain it — serving the injection demo
+the same way and showing the real gate reject it IS that demonstration, not a weaker one.
+Rationale also: determinism (a public button must be reliable; the live 70B varies
+run-to-run), no per-press HF cost/abuse on a public endpoint. The distinction is made
+EXPLICIT in code (service docstring "WHAT IS REAL / WHAT IS RECORDED") and the UI banner.
+NOT stubbing the gate: validate/rate/finalize all run live; only the model's extraction
+output is recorded.
+
+**The pair (clean + injection).** Clean → extracted/validated/priced → `quoted` draft in
+the queue. Injection (instruction_override, `attack_payload` intent `approve_and_send`) →
+the gate rejects `invalid_intent` → `needs_review`, NO deal, NO draft; the panel shows the
+gate reason inline (a needs_review email isn't a `quoted` deal, so it surfaces in the panel
+result, not the queue list). The injection button is the differentiator — it SHOWS the
+defense, not just a quote.
+
+**No trust boundary weakened (the line held).** No unsigned `/ingest` (the demo never
+touches it — it invokes the consumer's building blocks server-side on fixed,
+server-controlled content). Seeds via the REAL `claim_insert` (server-side-write-only),
+not a backdoor. No LLM-triggered send — the demo produces only a DRAFT a human approves.
+Guards, all fail-closed: `DEMO_ENABLED` (default false → `/demo/sample` 404s via a
+`require_demo_enabled` dependency, and the console panel doesn't render — gated on the
+matching `NEXT_PUBLIC_DEMO_ENABLED` since Next bakes env at build); real Supabase JWT/RBAC
+(`require_reviewer`), and ADMIN required because a demo deal is NULL-reviewer →
+admin-visible under RLS, exactly like a real ingested deal (no special assignment); the
+existing per-client rate limiter; demo rows labeled (`demo-<uuid>` id, demo sender) so they
+are identifiable and prunable (`supabase db reset` wipes them).
+
+**Tests:** integration (real DB) proves the REAL gate runs — injection → `needs_review`
+with `invalid_intent`, clean → `quoted` draft with a quote; hermetic route tests prove
+`DEMO_ENABLED=false` → 404 and non-admin → 403. Gates: ruff 0, mypy 0, pytest 315; frontend
+lint/typecheck/build 0.
+
 ## 2026-06-18 — Supabase advisor: multiple-permissive-policies WARN deferred (perf-only)
 The Supabase linter flags **multiple permissive RLS policies** on `public.carriers` and
 `public.users` (a SELECT is evaluated against more than one permissive policy, so Postgres ORs
