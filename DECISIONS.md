@@ -1,6 +1,41 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-18 — CI caught a green-by-wrong-reason audit test (local-bootstrap-only grant)
+**The first CI run did its job: 308 passed AND the integration tests RAN (test_rls + audit
+unskipped), proving the Supabase-in-CI setup closes green-by-skip — and it surfaced a latent test
+defect in the same motion.** 3 errors, all at `test_audit_append_only.py` FIXTURE SETUP:
+`InsufficientPrivilege: permission denied for table audit_log` when the fixture did `set role
+service_role; insert into public.audit_log`. Same class as the fence-swallow / connection-leak
+finds — green locally for the WRONG reason, caught by a faithful environment.
+
+**Diagnosis = TEST bug, not a migration gap (fork b).** The real app write path inserts audit_log
+as the **`postgres` connection role** (the `DATABASE_URL` user — table owner, bypasses RLS by
+ownership): `repository.py` is a plain `insert(audit_log)` on the caller's connection, and
+`grep "set role"` over `src/` is EMPTY — the app never switches Postgres role. The `db/__init__`
+"(service-role) connection" wording is conceptual (a privileged RLS-bypassing writer); the SQL
+role is `postgres`. The migrations deliberately give audit_log **no client INSERT** (migration 5:
+no WITH CHECK policy — that would let a reviewer forge rows) and migration 10 revokes writes from
+anon/authenticated only; **service_role is never granted INSERT**. The test's `set role
+service_role` is fictional — it passed locally ONLY because the local Supabase CLI bootstrap issues
+a broad default-privileges grant that hands service_role table writes (the exact local-vs-hosted
+divergence from 8.1). CI, faithful to the migrations, correctly denied it. Corroboration: every
+other invariant-write integration test (finalize/send/surcharge) writes as `postgres` with no
+`set role` and passed in CI; the role-switching audit test was the lone outlier/defect.
+
+**Fix = test-only: remove the `set role service_role` line** so seed + mutations run as the real
+`postgres` connection role, mirroring the app. Docstring/comments corrected to state the real path.
+**Invariant preserved:** `forbid_mutation()` has no role check, so it fires for the owner too —
+UPDATE/DELETE/TRUNCATE still raise P0001 "append-only" (all three assertions, incl. the distinct
+TRUNCATE statement-trigger one, hold). This also honors the test's ORIGINAL intent (prove the
+*trigger*, not RLS, stops a privileged RLS-bypassing writer) — `postgres` IS that writer, and the
+real one. **Explicitly NOT done:** no `GRANT INSERT ... TO service_role` (the psycopg hint) — that
+would enlarge the audit write surface and erode the tamper-evident / server-side-write-only
+property (THREAT_MODEL B9), and is pointless since the app never writes as service_role; no
+migration change (no production grant is missing — prod writes as the owner, and INSERT is never
+what `forbid_mutation` blocks). Gates: ruff 0, mypy 0, pytest 311 passed (audit trio now runs +
+passes locally too, since postgres can insert there).
+
 ## 2026-06-18 — CI/CD: quality-gate workflow (gates code, does NOT deploy)
 **Scope decision (locked, not re-litigated): CI = QUALITY GATES + branch protection, NOT a
 deploy pipeline.** Render + Vercel already auto-deploy on push to main (platform-native). CI

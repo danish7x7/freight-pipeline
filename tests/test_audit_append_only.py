@@ -4,10 +4,12 @@
 DELETE trigger AND a statement-level BEFORE TRUNCATE trigger (a row trigger does
 not fire on TRUNCATE). This test proves all three mutation paths raise.
 
-These mutations are issued as ``service_role`` — the actual sole writer for the
-invariant-bearing tables (it bypasses RLS). That is deliberate: it proves the
-*trigger* stops the real write path, not a role RLS would have filtered anyway.
-The trigger has no role check, so it must fire for the privileged writer too.
+These mutations are issued on the real application write path: a direct connection
+as the ``postgres`` role (the ``DATABASE_URL`` user — table owner, bypasses RLS by
+ownership), exactly how the app inserts audit rows (``repository.py`` plain insert,
+no ``set role``). That is deliberate: it proves the *trigger* stops the real
+privileged writer, not a role RLS would have filtered anyway. ``forbid_mutation()``
+has no role check, so it fires for the owner too.
 
 TRUNCATE is a distinct assertion. If UPDATE/DELETE raise but TRUNCATE slips
 through, that is a real coverage gap in the trigger (the missing statement-level
@@ -37,7 +39,7 @@ SEED_ID = "ad17ad17-0000-0000-0000-000000000001"
 
 @pytest.fixture
 def conn() -> Iterator["psycopg.Connection"]:
-    """A rolled-back service-role connection seeded with one audit_log row."""
+    """A rolled-back postgres-role connection seeded with one audit_log row."""
     dsn = os.environ.get("RLS_TEST_DSN", DEFAULT_DSN)
     try:
         connection = psycopg.connect(dsn, autocommit=False, connect_timeout=3)
@@ -45,9 +47,10 @@ def conn() -> Iterator["psycopg.Connection"]:
         pytest.skip(f"local supabase db not reachable: {exc}")
     try:
         cur = connection.cursor()
-        # Act as the real writer for invariant-bearing tables. service_role
-        # bypasses RLS, so the only thing that can stop a mutation is the trigger.
-        cur.execute("set role service_role")
+        # Write as the real app path: the postgres connection role (owner, bypasses
+        # RLS by ownership), NOT a fictional `set role service_role` — the app never
+        # switches role (repository.py plain insert). The owner bypasses RLS, so the
+        # only thing that can stop a mutation is the trigger.
         # NULL actor = system actor (poll loop / surcharge cron), so no users row
         # is needed to give UPDATE/DELETE a target.
         cur.execute(
