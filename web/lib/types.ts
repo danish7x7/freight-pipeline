@@ -29,6 +29,7 @@ export interface DealRow {
   dest_city: string | null;
   dest_state: string | null;
   equipment: string | null;
+  is_demo: boolean;
   quotes: QuoteRow[];
   email_messages: EmailRow[];
 }
@@ -42,7 +43,7 @@ export interface DealRow {
 // via the single sends.quote_id FK (unambiguous), and `email_messages` has one FK — both
 // need no hint. Constraint names verified against the live schema (pg_constraint).
 export const REVIEW_SELECT =
-  "id, origin_city, origin_state, dest_city, dest_state, equipment," +
+  "id, origin_city, origin_state, dest_city, dest_state, equipment, is_demo," +
   " quotes!quotes_deal_id_fkey(id, amount_cents, currency, is_computed, sends(status))," +
   " email_messages(sender, subject, body, confidence)";
 
