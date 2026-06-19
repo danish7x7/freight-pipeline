@@ -10,10 +10,14 @@
 -- instance_id — added then, or provisioned via the Auth admin API.
 
 -- ---------------------------------------------------------------------------
--- Users — LOGIN-ABLE seed (Phase 5). DEV/DEMO ONLY: all three share the password
--- 'freight-demo-pw'. Never use these in production. Full auth.users rows (encrypted
--- password + confirmed + email provider) plus matching auth.identities so Supabase
--- Auth password login works on `supabase db reset`.
+-- Users — LOGIN-ABLE seed (Phase 5). DEV/DEMO ONLY: all share the password
+-- 'freight-demo-pw' for the LOCAL stack. Never use these in production — the live
+-- deploy does NOT run this seed (its admin was created manually with a private
+-- password; the published demo login is a least-privilege reviewer created live).
+-- 'demo@freight-pipeline.example' is the least-privilege demo reviewer (role reviewer,
+-- never admin) — mirrors the live published demo account for local parity. Full
+-- auth.users rows (encrypted password + confirmed + email provider) plus matching
+-- auth.identities so Supabase Auth password login works on `supabase db reset`.
 -- ---------------------------------------------------------------------------
 insert into auth.users (
     instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -28,7 +32,8 @@ select
 from (values
     ('a1111111-1111-1111-1111-111111111111'::uuid, 'admin@freight.local'),
     ('a2222222-2222-2222-2222-222222222222'::uuid, 'reviewer1@freight.local'),
-    ('a3333333-3333-3333-3333-333333333333'::uuid, 'reviewer2@freight.local')
+    ('a3333333-3333-3333-3333-333333333333'::uuid, 'reviewer2@freight.local'),
+    ('a4444444-4444-4444-4444-444444444444'::uuid, 'demo@freight-pipeline.example')
 ) as u(id, email);
 
 insert into auth.identities (
@@ -41,13 +46,15 @@ select
 from (values
     ('a1111111-1111-1111-1111-111111111111'::uuid, 'admin@freight.local'),
     ('a2222222-2222-2222-2222-222222222222'::uuid, 'reviewer1@freight.local'),
-    ('a3333333-3333-3333-3333-333333333333'::uuid, 'reviewer2@freight.local')
+    ('a3333333-3333-3333-3333-333333333333'::uuid, 'reviewer2@freight.local'),
+    ('a4444444-4444-4444-4444-444444444444'::uuid, 'demo@freight-pipeline.example')
 ) as u(id, email);
 
 insert into public.users (id, email, role) values
     ('a1111111-1111-1111-1111-111111111111', 'admin@freight.local', 'admin'),
     ('a2222222-2222-2222-2222-222222222222', 'reviewer1@freight.local', 'reviewer'),
-    ('a3333333-3333-3333-3333-333333333333', 'reviewer2@freight.local', 'reviewer');
+    ('a3333333-3333-3333-3333-333333333333', 'reviewer2@freight.local', 'reviewer'),
+    ('a4444444-4444-4444-4444-444444444444', 'demo@freight-pipeline.example', 'reviewer');
 
 -- ---------------------------------------------------------------------------
 -- Carriers (exercises the MC eligibility gate: active vs blocked; not-found=unknown)

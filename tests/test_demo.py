@@ -1,9 +1,9 @@
-"""Demo pipeline: the REAL validation gate runs (not stubbed), and the endpoint gated.
+"""Demo pipeline: the REAL gate runs (not stubbed), and a demo deal can NEVER send.
 
-Integration (DB) tests prove the recorded-model demo flows the real gate: the injection
-sample is CONTAINED (routes to needs_review with the gate reason), and the clean sample
-reaches a quoted draft. Hermetic route tests prove the fail-closed guards: 404 when
-DEMO_ENABLED is off, 403 for a non-admin caller.
+Integration (DB) tests prove the recorded-model demo flows the real gate (injection →
+needs_review with the gate reason; clean → a quoted draft), that the demo deal is
+least-privilege (assigned to the caller + is_demo), and the load-bearing guard: the REAL
+``send_quote`` refuses a demo deal. Hermetic route test proves DEMO_ENABLED off → 404.
 """
 
 import os
@@ -21,9 +21,12 @@ from freight.auth import Reviewer, require_reviewer
 from freight.config import Settings
 from freight.db import IngestRepository, make_engine
 from freight.demo import run_demo_sample
+from freight.mocks.gmail import MockGmailClient
 from freight.security.http_rate_limit import get_rate_limiter
+from freight.sending import SendError, send_quote
 
 DEFAULT_DSN = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+DEMO_UID = "a4444444-4444-4444-4444-444444444444"
 
 
 # --- Integration: the REAL gate runs on the recorded model output --------------------
@@ -65,7 +68,7 @@ def test_injection_sample_is_contained_by_the_real_gate(
     env: tuple[IngestRepository, list[str]],
 ) -> None:
     repo, _ = env
-    result = run_demo_sample(repo, sample="injection")
+    result = run_demo_sample(repo, sample="injection", reviewer_uid=DEMO_UID)
     # Recorded output = a fully-fooled model (intent=approve_and_send). The REAL gate
     # rejects it → needs_review, no deal, with the gate's reason visible.
     assert result.status == "needs_review"
@@ -76,11 +79,11 @@ def test_injection_sample_is_contained_by_the_real_gate(
 
 
 @pytest.mark.integration
-def test_clean_sample_reaches_a_quoted_draft(
+def test_clean_sample_is_a_least_privilege_quoted_draft(
     env: tuple[IngestRepository, list[str]],
 ) -> None:
     repo, deal_ids = env
-    result = run_demo_sample(repo, sample="clean")
+    result = run_demo_sample(repo, sample="clean", reviewer_uid=DEMO_UID)
     if result.deal_id:
         deal_ids.append(result.deal_id)
     assert result.status == "processed"
@@ -88,9 +91,37 @@ def test_clean_sample_reaches_a_quoted_draft(
     assert result.deal_state == "quoted"
     assert result.deal_id is not None
     assert result.quote_id is not None
+    # Least-privilege: scoped to the caller (RLS, not admin-visible) and flagged demo.
+    deal = repo.get_deal(result.deal_id)
+    assert deal is not None
+    assert deal.assigned_reviewer == DEMO_UID
+    assert deal.is_demo is True
 
 
-# --- Hermetic: the endpoint's fail-closed guards -------------------------------------
+@pytest.mark.integration
+def test_demo_deal_cannot_be_sent(
+    env: tuple[IngestRepository, list[str]],
+) -> None:
+    """Load-bearing: the REAL send path refuses a demo deal — no Gmail send, ever."""
+    repo, deal_ids = env
+    result = run_demo_sample(repo, sample="clean", reviewer_uid=DEMO_UID)
+    if result.deal_id:
+        deal_ids.append(result.deal_id)
+    assert result.quote_id is not None
+    reviewer = Reviewer(uid=DEMO_UID, email="demo@test", role="reviewer")
+    with pytest.raises(SendError) as excinfo:
+        send_quote(
+            repo,
+            MockGmailClient(),
+            reviewer=reviewer,
+            quote_id=result.quote_id,
+            body="hi",
+        )
+    assert excinfo.value.status_code == 403
+    assert "demo deal is not sendable" in excinfo.value.detail
+
+
+# --- Hermetic: the endpoint's fail-closed guard --------------------------------------
 
 
 class _AllowAll:
@@ -114,13 +145,6 @@ def test_demo_disabled_returns_404(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         demo_route, "get_settings", lambda: Settings(demo_enabled=False)
     )
-    with _client("admin") as client:
-        res = client.post("/demo/sample", json={"sample": "clean"})
-    assert res.status_code == 404
-
-
-def test_demo_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(demo_route, "get_settings", lambda: Settings(demo_enabled=True))
     with _client("reviewer") as client:
         res = client.post("/demo/sample", json={"sample": "clean"})
-    assert res.status_code == 403
+    assert res.status_code == 404

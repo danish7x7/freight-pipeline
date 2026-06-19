@@ -49,6 +49,8 @@ def reject_deal(
     deal = repo.get_deal(deal_id)
     if deal is None:
         raise SendError(404, "deal not found")
+    if deal.is_demo:
+        raise SendError(403, "demo deal is not actionable")
     if reviewer.role != "admin" and deal.assigned_reviewer != reviewer.uid:
         raise SendError(403, "not your deal")
     try:
@@ -86,6 +88,11 @@ def send_quote(
     deal = repo.get_deal(quote.deal_id)
     if deal is None:
         raise SendError(404, "deal not found")
+    # Structural send-block: a demo deal can NEVER trigger a real Gmail send — for the
+    # published demo login OR an admin. This is the load-bearing guard that lets the
+    # demo account stay least-privilege (see freight.demo).
+    if deal.is_demo:
+        raise SendError(403, "demo deal is not sendable")
     if reviewer.role != "admin" and deal.assigned_reviewer != reviewer.uid:
         raise SendError(403, "not your deal")
     if deal.state != "quoted":
