@@ -233,9 +233,15 @@ Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DEC
       surfaced + fixed two latent production defects (hf.py fence-swallow, api engine leak).
 
 ## Phase 10 — Showcase
-- [ ] README: problem, architecture diagram, decisions, eval numbers, threat model.
+- [x] README: problem, architecture diagram, decisions, eval numbers, threat model.
+      (Done 2026-06-18, PR #1: problem + hook, Mermaid architecture diagram agreeing with
+      THREAT_MODEL, eval numbers verbatim, threat-model summary + Limitations; decisions via
+      the DECISIONS.md link/repo map.)
 - [ ] `ARCHITECTURE.md`, `DECISIONS.md` (ADRs), `LEARNING.md` polished.
-- [ ] Live demo with a "load sample order email" button (no Gmail needed to try it).
+- [x] Live demo with a "load sample order email" button (no Gmail needed to try it).
+      (Done 2026-06-18/19, PRs #2/#3: clean + injection pair runs the REAL gate; recorded
+      model output; least-privilege demo reviewer, is_demo send-block. Live after the
+      schema-push fix — see DECISIONS 2026-06-19.)
 - [ ] 2–3 min demo video.
 - [ ] Write-up for LinkedIn + portfolio, leading with the novelty
       (injection-aware, human-supervised logistics quoting).
