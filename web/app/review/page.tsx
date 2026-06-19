@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
 import { Card } from "@/components/ui";
+import { DemoPanel } from "@/components/DemoPanel";
 import { type DealRow, dollars, lane, REVIEW_SELECT } from "@/lib/types";
 
 export default function ReviewQueue() {
@@ -12,6 +13,24 @@ export default function ReviewQueue() {
   const [deals, setDeals] = useState<DealRow[]>([]);
   const [email, setEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const loadDeals = useCallback(async () => {
+    // RLS scopes deals to the signed-in reviewer (or all, for admin).
+    const { data, error } = await getSupabase()
+      .from("deals")
+      .select(REVIEW_SELECT)
+      .eq("state", "quoted");
+    // Surface query errors — a swallowed PGRST201 once looked like an empty queue.
+    if (error) console.error("review queue query failed:", error);
+    // Deal state stays 'quoted' after a send; the 'sent' sends row is the send signal
+    // (Phase 5: review queue = 'quoted' deals with no completed send). Hide deals whose
+    // quote has already been sent. A 'claimed' (stuck, RECOVERY.md §4) or 'failed' send
+    // stays VISIBLE — those need a reviewer's eyes, not hiding.
+    const pending = ((data as unknown as DealRow[] | null) ?? []).filter(
+      (d) => !d.quotes.some((q) => q.sends?.status === "sent"),
+    );
+    setDeals(pending);
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -23,24 +42,10 @@ export default function ReviewQueue() {
         return;
       }
       setEmail(session.user.email ?? null);
-      // RLS scopes deals to the signed-in reviewer (or all, for admin).
-      const { data, error } = await getSupabase()
-        .from("deals")
-        .select(REVIEW_SELECT)
-        .eq("state", "quoted");
-      // Surface query errors — a swallowed PGRST201 once looked like an empty queue.
-      if (error) console.error("review queue query failed:", error);
-      // Deal state stays 'quoted' after a send; the 'sent' sends row is the send signal
-      // (Phase 5: review queue = 'quoted' deals with no completed send). Hide deals whose
-      // quote has already been sent. A 'claimed' (stuck, RECOVERY.md §4) or 'failed' send
-      // stays VISIBLE — those need a reviewer's eyes, not hiding.
-      const pending = ((data as unknown as DealRow[] | null) ?? []).filter(
-        (d) => !d.quotes.some((q) => q.sends?.status === "sent"),
-      );
-      setDeals(pending);
+      await loadDeals();
       setLoading(false);
     })();
-  }, [router]);
+  }, [router, loadDeals]);
 
   async function signOut() {
     await getSupabase().auth.signOut();
@@ -58,6 +63,8 @@ export default function ReviewQueue() {
           </button>
         </div>
       </header>
+
+      <DemoPanel onLoaded={() => void loadDeals()} />
 
       {loading ? (
         <p className="text-gray-500">Loading…</p>

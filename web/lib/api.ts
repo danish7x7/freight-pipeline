@@ -43,3 +43,23 @@ export const sendQuote = (quoteId: string, body: string) =>
 
 export const rejectDeal = (dealId: string) =>
   authedPost("/review/reject", { deal_id: dealId });
+
+// The showcase demo: seed a fixed sample and run the REAL validation gate + pricing on
+// the backend. Returns the outcome (status / intent / review_reason / deal_state) so the
+// panel can show what happened. The backend 404s unless DEMO_ENABLED is set.
+export type DemoOutcome = {
+  sample: "clean" | "injection";
+  status: string;
+  intent: string | null;
+  review_reason: string | null;
+  deal_id: string | null;
+  deal_state: string | null;
+  blurb: string;
+};
+
+export async function loadDemoSample(
+  sample: "clean" | "injection",
+): Promise<DemoOutcome> {
+  const res = await authedPost("/demo/sample", { sample });
+  return res as unknown as DemoOutcome;
+}
