@@ -51,18 +51,18 @@ jobs:
         with:
           # Pinned (not latest): `supabase start` is the slowest/most flake-prone step
           # and a new external dep — a CLI release must not silently change CI behavior.
-          version: 2.105.0
+          # 2.107.0 = the locally-validated version, so CI matches proven-working behavior.
+          version: 2.107.0
 
       # Real Supabase Postgres (NOT a bare postgres): the RLS/audit tests need the
       # Supabase auth schema + anon/authenticated/service_role roles + request.jwt.claims
       # plumbing that the image bootstraps. `supabase start` applies supabase/migrations/*
       # (filename order) + seed.sql — the same path as local `supabase db reset` (the
-      # schema source of truth). DB-only (exclude all aux services) for speed + the
-      # smallest container surface = least flake; tests talk to Postgres on 54322 directly.
-      - name: Start the Supabase local DB
-        run: >-
-          supabase start
-          -x imgproxy,studio,inbucket,realtime,edge-runtime,functions,vector,analytics,kong,rest,storage,meta
+      # schema source of truth). Plain start (no -x): boring-and-correct first — get a
+      # green run that proves the integration tests run unskipped; an aggressive exclude
+      # list risks a service-dependency error/hang. -x speedup is optional polish for later.
+      - name: Start the Supabase local stack
+        run: supabase start
 
       - name: Install dependencies (runtime + dev)
         run: uv sync --frozen
