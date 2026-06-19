@@ -1,6 +1,28 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-19 — Live 500 on /demo/sample: schema-push must lead code-deploy
+**Incident.** The `is_demo` migration (`20260618120000_deals_is_demo.sql`) shipped in code
+and auto-deployed to Render BEFORE `supabase db push` had run against hosted Supabase, so the
+live `/demo/sample` 500'd with `UndefinedColumn: column deals.is_demo does not exist` — the
+deployed code referenced a column the live DB didn't have yet.
+
+**Root cause.** Render code-deploy (auto on push to main) and Supabase schema-push (a manual
+`supabase db push`) are DECOUPLED — two independent release channels. A migration in the repo
+is not a migration on the hosted DB. When code that references a new column deploys before the
+column exists, every request touching it fails.
+
+**Resolution.** Applied the pending migration to live (`supabase db push`); `supabase db diff`
+clean (local == hosted); `/demo/sample` recovered. No data change — the column is additive with
+a NOT NULL default.
+
+**Carry-forward rule (binding).** Schema must LEAD code. Any new migration must be
+`supabase db push`'d to live and verified (`db diff` clean) BEFORE the code that references it
+deploys to Render. For an additive column this means: push the migration first, then
+merge/deploy the code. (This is the deploy-ordering corollary of the 8.1 "migrations are the
+source of truth" discipline — the source of truth still has to be applied to the hosted DB
+out-of-band.)
+
 ## 2026-06-18 — Demo redesigned to least-privilege BEFORE merge (supersedes admin-gated)
 **Why (the real reason):** the first cut of the Phase 10 demo (entry below) gated
 `/demo/sample` on ADMIN, because demo deals were NULL-reviewer → admin-visible. But
