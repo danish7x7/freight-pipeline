@@ -237,7 +237,9 @@ Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DEC
       (Done 2026-06-18, PR #1: problem + hook, Mermaid architecture diagram agreeing with
       THREAT_MODEL, eval numbers verbatim, threat-model summary + Limitations; decisions via
       the DECISIONS.md link/repo map.)
-- [ ] `ARCHITECTURE.md`, `DECISIONS.md` (ADRs), `LEARNING.md` polished.
+- [x] `LEARNING.md` written; `DECISIONS.md` is the standing decision log. Architecture
+      lives in the README Mermaid diagram + `THREAT_MODEL.md` (kept in agreement) rather than
+      a standalone `ARCHITECTURE.md` — folded in to avoid duplication (see DECISIONS 2026-06-19).
 - [x] Live demo with a "load sample order email" button (no Gmail needed to try it).
       (Done 2026-06-18/19, PRs #2/#3: clean + injection pair runs the REAL gate; recorded
       model output; least-privilege demo reviewer, is_demo send-block. Live after the
