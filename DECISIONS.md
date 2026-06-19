@@ -1,6 +1,18 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-18 — Supabase advisor: multiple-permissive-policies WARN deferred (perf-only)
+The Supabase linter flags **multiple permissive RLS policies** on `public.carriers` and
+`public.users` (a SELECT is evaluated against more than one permissive policy, so Postgres ORs
+them — each policy runs per row). This is a **PERFORMANCE-only WARN**, negligible at showcase
+volume (tiny tables, ~80 emails/day): the extra cost is a second policy predicate per row, not a
+correctness or security issue. **RLS correctness/security is unaffected** — the union of permissive
+policies is exactly the intended access (self-or-admin reads); nothing is leaked or over-granted.
+Consolidating into a single policy per command (the advisor's remediation) is **deliberately
+deferred**: it's a micro-optimization that would touch the security-sensitive RLS surface for no
+measurable benefit here. Logged so it isn't re-litigated; revisit only if a real volume/perf need
+appears.
+
 ## 2026-06-18 — CI caught a green-by-wrong-reason audit test (local-bootstrap-only grant)
 **The first CI run did its job: 308 passed AND the integration tests RAN (test_rls + audit
 unskipped), proving the Supabase-in-CI setup closes green-by-skip — and it surfaced a latent test
