@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     public_rate_limit_per_minute: int = 120
     llm_calls_per_minute: int = 60
 
+    # Demo control for the showcase console's "load sample order" feature. Fail-closed:
+    # default False => the /demo/sample endpoint 404s (no demo write path) and the
+    # console panel does not render. Set True ONLY on the showcase deploy. The frontend
+    # gates the panel on the separate NEXT_PUBLIC_DEMO_ENABLED (Next bakes env at build,
+    # so it cannot read this backend value) — set both together on the showcase deploy.
+    demo_enabled: bool = False
+
     # --- Interface selection (swap impls by config, not by code) ---
     llm_backend: Literal["mock", "hf"] = "mock"
     gmail_backend: Literal["mock", "gmail"] = "mock"
