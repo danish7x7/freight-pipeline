@@ -1,6 +1,44 @@
 # DECISIONS.md
 Append decisions and dead-ends here, newest first, with dates.
 
+## 2026-06-18 — Demo redesigned to least-privilege BEFORE merge (supersedes admin-gated)
+**Why (the real reason):** the first cut of the Phase 10 demo (entry below) gated
+`/demo/sample` on ADMIN, because demo deals were NULL-reviewer → admin-visible. But
+`admin@freight.local` is the SOLE admin identity, so publishing it as the demo login
+would publish admin + send capability to anyone. A published demo login must be
+least-privilege and must NOT be able to send real email. Redesigned on `feat/demo-sample`
+before it merged — no admin requirement ships.
+
+**The fix (least-privilege reviewer + structural send-block):**
+- Demo deals are created **assigned to the calling reviewer** (the published, role
+  `reviewer` demo account) — `finalize`/`create_deal` gained optional `assigned_reviewer`
+  + `is_demo` (both default to the real-ingest behavior: unassigned, not demo, so the
+  real path is unchanged). RLS (`can_access_deal = is_admin OR assigned_reviewer = uid`)
+  then scopes the demo account to ONLY its own demo deals — not admin-visible, no other
+  data (audit_log stays admin-read; carriers/rates are read-all synthetic reference).
+- New `deals.is_demo` column (migration 20260618120000): `send_quote` AND `reject_deal`
+  refuse any `is_demo` deal (`SendError 403`). This is the load-bearing guard — a demo
+  deal can NEVER trigger a real Gmail send, for the demo login OR an admin (so an
+  operator can't accidentally fire one either). Service-level, matching the existing
+  authz pattern; UI also disables send/reject for demo deals (belt-and-suspenders).
+- `/demo/sample` now requires only `require_reviewer` (authenticated) and self-assigns to
+  `reviewer.uid` — no role hardcoded in code; the demo account is purely an ops construct.
+
+**Load-bearing test (real path, not stubbed):** `test_demo_deal_cannot_be_sent` runs the
+demo to a real quoted `is_demo` deal, then calls the REAL `send_quote` and asserts
+`403 "demo deal is not sendable"`. Plus: injection → needs_review/`invalid_intent`, clean
+→ quoted draft that is `assigned_reviewer=<caller>` + `is_demo=True`, and DEMO_ENABLED
+off → 404.
+
+**Credential-hygiene FACTS (accurate, verified against the live Auth users list):** the
+LIVE deploy was **NOT** seeded from `seed.sql` — `admin@freight.local` was created
+manually in the dashboard with a PRIVATE password (never `freight-demo-pw`), and the
+seed reviewer accounts do not exist on live. So the seed's shared `freight-demo-pw` is a
+**local-dev-only artifact** and there was **no live credential exposure** — nothing on
+live was rotated, because nothing needed to be. The published demo login is a NEW
+least-privilege reviewer (`demo@freight-pipeline.example`, role `reviewer`) created on
+live separately; `seed.sql` adds the same account locally for parity (dev password only).
+
 ## 2026-06-18 — Phase 10 demo: "load sample order" (recorded model, REAL gate)
 **Goal:** let a visitor to the live console watch the pipeline — and specifically the
 injection defense — without a real inbound email. **Chosen injection point = option (b):**
