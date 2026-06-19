@@ -206,7 +206,12 @@ Triaged into LOCAL-now (7.1–7.4, done below) vs DEPLOY-time (Phase 8). See DEC
       (Was stale: the console has been live at freight-pipeline.vercel.app; ticked 2026-06-18
       during the ops pass. See DECISIONS 2026-06-18.)
 - [ ] Connection strings in GitHub Secrets + provider secret stores.
-- [ ] CI/CD: lint/type/test/build/deploy on push; branch protection; PR previews.
+- [x] CI/CD: lint/type/test/build/deploy on push; branch protection; PR previews.
+      (Done 2026-06-18: `.github/workflows/ci.yml` gates lint/type/test + a --no-dev prod-image
+      build; deploy stays platform-native (Render/Vercel auto-deploy on push). Branch protection
+      ACTIVE — PR required + CI-green required. Render/Vercel give PR previews. CI also closed the
+      green-by-skip gap (supabase start) and caught the audit-test fictional-role bug. See
+      DECISIONS 2026-06-18.)
 - **Done when:** a synthetic email flows through the *cloud* path and a reply sends.
 
 ## Phase 9 — Evaluation + load test
